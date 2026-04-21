@@ -1,0 +1,22 @@
+# Databricks & Bundles
+.bundle/
+.databricks/
+out/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+dist/
+build/
+*.egg-info/
+.venv/
+venv/
+.env
+
+# MacOS/Windows junk
+.DS_Store
+Thumbs.db
+
+# Misc
+docs/
