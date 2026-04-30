@@ -299,16 +299,6 @@ def test_responses_agent_propagates_user_id() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason=(
-        "Asserts gold_tsb_meta / gold_sgo_av_crashes are in the registered "
-        "resources, but those gold tables were never built (silver sources "
-        "exist, gold transforms skipped for the 2026-04-22 demo). Re-enable "
-        "after either building the transforms in 2.7_gold_dimensions_facts.py "
-        "and restoring agent.py resource declarations, or trimming "
-        "required_tables to the four tables that actually exist."
-    )
-)
 def test_log_register_agent_resources_contain_all_gold_tables() -> None:
     """Every gold fact table referenced by the Genie tool must be in the
     registered resources — missing one manifests as a UC 403 at prod
@@ -370,12 +360,14 @@ def test_log_register_agent_resources_contain_all_gold_tables() -> None:
     # Warehouse.
     assert "wh-123" in resource_blob
     # Every gold table referenced by the agent's Genie tool.
+    # NOTE: gold_tsb_meta and gold_sgo_av_crashes silver sources exist but
+    # the gold transforms in 2.7_gold_dimensions_facts.py were not built
+    # for the initial release. Add them back here once the transforms and
+    # corresponding resource declarations in agent.py exist.
     required_tables = {
         "gold_recalls_fact",
         "gold_complaints_fact",
         "gold_investigations_fact",
-        "gold_tsb_meta",
-        "gold_sgo_av_crashes",
         "gold_narrative_chunks",
     }
     for tbl in required_tables:

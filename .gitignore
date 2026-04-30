@@ -13,10 +13,29 @@ build/
 .venv/
 venv/
 .env
+.env.*
 
-# MacOS/Windows junk
+# Testing & linting caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# MLflow local store (only used for ad-hoc local runs;
+# real experiments live in the workspace)
+mlflow.db
+mlruns/
+
+# IDE & OS junk
+.vscode/
+.idea/
 .DS_Store
 Thumbs.db
 
-# Misc
+# Local artifacts (not for distribution)
+*.duckdb
+*.sqlite
+
+# Internal design docs and demo artifacts (kept local)
 docs/
