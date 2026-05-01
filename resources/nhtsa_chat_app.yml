@@ -1,0 +1,15 @@
+# Streamlit chat UI for the NHTSA Defect Intel agent.
+# Phase 1: minimal app that calls the existing serving endpoint.
+# Phase 2 will lift hardcoded endpoint name to a bundle variable and
+# add a Lakebase database resource for chat-history persistence.
+
+resources:
+  apps:
+    nhtsa_chat:
+      name: nhtsa-defect-chat
+      source_code_path: ../app
+      resources:
+        - name: agent_endpoint
+          serving_endpoint:
+            name: nhtsa-agent-endpoint-dev-pg
+            permission: CAN_QUERY
