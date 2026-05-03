@@ -128,6 +128,20 @@ agents.deploy(
         "LAKEBASE_SP_CLIENT_ID": "{{secrets/dev_SPN/client_id}}",
         "LAKEBASE_SP_CLIENT_SECRET": "{{secrets/dev_SPN/client_secret}}",
         "LAKEBASE_SP_HOST": WorkspaceClient().config.host,
+        # Force WorkspaceClient() inside the agent (serving.py
+        # _build_tool_context) to authenticate as Pralay's PAT so
+        # ws.genie / ws.statement_execution run with full SELECT on
+        # mlops_dev.pralaygh.dim_*. The endpoint's auto-managed SPN
+        # only has CAN_RUN on the Genie space — not SELECT on the dim
+        # tables — so generated SQL fails as the SPN
+        # (MessageStatus.FAILED). True OBO via ModelServingUserCredentials
+        # would need (a) workspace admin enables the OBO Authorization
+        # preview and (b) UserAuthPolicy declared at log_model time;
+        # neither is in place as of 2026-05.
+        # DATABRICKS_AUTH_TYPE=pat forces the SDK to ignore the auto-
+        # injected DATABRICKS_CLIENT_ID/SECRET (the SPN) and use the PAT.
+        "DATABRICKS_TOKEN": "{{secrets/pralaygh-personal/pralay_pat}}",
+        "DATABRICKS_AUTH_TYPE": "pat",
     },
 )
 

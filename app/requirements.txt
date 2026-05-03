@@ -1,0 +1,13 @@
+# Databricks Apps dependency manifest.
+#
+# Apps' installer reads this file (not pyproject.toml). Pins mirror
+# `app/pyproject.toml`, which exists for editor / `uv sync` / metadata
+# only and is NOT consulted by the Apps runtime as of 2026-05.
+streamlit==1.39.0
+databricks-sdk==0.85.0
+openai==2.8.0
+mlflow==3.8.1
+# altair ships transitively with streamlit but pin explicitly so the
+# dashboard charts (st.altair_chart) don't break on a streamlit upgrade.
+altair==5.4.1
+pandas==2.2.3

@@ -14,3 +14,20 @@ command:
 env:
   - name: AGENT_ENDPOINT_NAME
     value: nhtsa-agent-endpoint-dev-pg
+  # Warehouse + UC schema for the dashboard panels (KPIs, OEM bar,
+  # complaint themes, recall trend, investigations table). Hardcoded
+  # to dev for Phase 1; lift to bundle vars in Phase 2.
+  - name: DATABRICKS_WAREHOUSE_ID
+    value: 96e26e80fcd91931
+  - name: NHTSA_CATALOG_SCHEMA
+    value: mlops_dev.pralaygh
+  # Force the SDK's auth chain to PAT only. Apps inject
+  # DATABRICKS_CLIENT_ID/SECRET by default; without this hint the SDK
+  # might pick OAuth M2M (the App SPN) instead of the PAT we're
+  # providing below.
+  - name: DATABRICKS_AUTH_TYPE
+    value: pat
+  # Pralay's PAT — see resources/nhtsa_chat_app.yml `pralay_pat`
+  # resource for why we're routing through PAT instead of App SPN.
+  - name: DATABRICKS_TOKEN
+    valueFrom: pralay_pat

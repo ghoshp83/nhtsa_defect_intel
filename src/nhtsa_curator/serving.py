@@ -240,6 +240,27 @@ def _build_tool_context(cfg: ProjectConfig) -> ToolContext:
     from databricks.sdk import WorkspaceClient  # noqa: PLC0415
     from databricks.vector_search.client import VectorSearchClient  # noqa: PLC0415
 
+    # Auth: relies on `DATABRICKS_TOKEN` + `DATABRICKS_AUTH_TYPE=pat`
+    # being injected as endpoint env vars by `deploy_agent.py` (PAT lives
+    # in `pralaygh-personal/pralay_pat`). That makes `WorkspaceClient()`
+    # default-chain resolve to Pralay's PAT, so `ws.genie` and
+    # `ws.statement_execution` run as Pralay — who is the only identity
+    # with SELECT on `mlops_dev.pralaygh.dim_*`. The endpoint's auto-
+    # managed SPN has `CAN_RUN` on the Genie space but no SELECT on the
+    # dim tables, and Pralay can't grant it (no MANAGE on the schema),
+    # so PAT injection is the only working auth model for now.
+    #
+    # We previously tried `ModelServingUserCredentials` from
+    # `databricks_ai_bridge` to OBO the caller's token, but that path
+    # requires (a) workspace admin enabling the "Agent Framework: OBO
+    # Authorization" preview, and (b) `UserAuthPolicy` declared at
+    # `log_model()` time. Without both, the strategy silently falls back
+    # to the endpoint SPN — same MessageStatus.FAILED outcome. PAT
+    # injection sidesteps all of that.
+    #
+    # Tradeoff: every caller of this endpoint effectively acts as Pralay.
+    # Acceptable for the single-user Phase 1 App; revisit before any
+    # multi-user rollout.
     ws = WorkspaceClient()
     vs_client = VectorSearchClient(disable_notice=True)
 

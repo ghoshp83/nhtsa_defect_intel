@@ -13,3 +13,20 @@ resources:
           serving_endpoint:
             name: nhtsa-agent-endpoint-dev-pg
             permission: CAN_QUERY
+        # Pralay's PAT, injected as DATABRICKS_TOKEN so the App calls
+        # the endpoint as Pralay (not as the App SPN). The endpoint then
+        # OBOs Pralay's identity into ws.genie / ws.statement_execution,
+        # which has full SELECT on mlops_dev.pralaygh — the App SPN does
+        # not, and we cannot grant it (no MANAGE on the schema). Same
+        # auth model as `notebooks/6.1_propagate_traces.py`. Phase 2
+        # follow-up: replace with proper per-user OBO once the model-
+        # serving invocation scope ships in the Apps User-authorization
+        # picker (still missing as of 2026-05).
+        #
+        # Scope is `pralaygh-personal` (Pralay-owned) rather than
+        # `dev_SPN` (admin-owned, no put permission for Pralay).
+        - name: pralay_pat
+          secret:
+            scope: pralaygh-personal
+            key: pralay_pat
+            permission: READ

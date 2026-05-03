@@ -2,15 +2,21 @@
 name = "nhtsa-defect-chat"
 version = "0.1.0"
 description = "Streamlit chat UI for the NHTSA Defect Intelligence agent serving endpoint."
-requires-python = ">=3.12, <3.13"
+requires-python = ">=3.11, <3.13"
 # Pins mirror the root nhtsa-curator pyproject.toml where they overlap so
 # the App and the agent share the same SDK / OpenAI / MLflow wire format.
 # Streamlit is App-only and not in the root project.
+# Python lower bound is 3.11 (not 3.12 as in root) because the Databricks
+# Apps runtime ships Python 3.11 — a >=3.12 pin makes Apps silently skip
+# installing our deps and the runtime falls back to base-image packages
+# only (no openai → ModuleNotFoundError on `from openai import OpenAI`).
 dependencies = [
     "streamlit==1.39.0",
     "databricks-sdk==0.85.0",
     "openai==2.8.0",
     "mlflow==3.8.1",
+    "altair==5.4.1",
+    "pandas==2.2.3",
 ]
 
 [build-system]
