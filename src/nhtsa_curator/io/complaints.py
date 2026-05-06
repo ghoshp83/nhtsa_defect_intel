@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from loguru import logger
 
 from .._typing import Json
-from ._flat_files import COMPLAINTS_COLUMNS, parse_flat_file, read_zip_member
+from ._flat_files import COMPLAINTS_COLUMNS, parse_flat_file, stream_zip_member
 from .http import NhtsaHttpClient
 
 
@@ -23,14 +23,18 @@ def fetch_complaints_bulk(
     client: NhtsaHttpClient,
     bulk_zip_url: str,
 ) -> Iterator[dict]:
-    """Stream the complaints bulk flat file as dicts."""
+    """Stream the complaints bulk flat file as dicts.
+
+    FLAT_CMPL decompresses to ~1–2 GB of text; we stream it through
+    ``stream_zip_member`` so the driver never holds the full payload.
+    """
     logger.info(f"Downloading complaints bulk dump from {bulk_zip_url}")
     payload = client.get_bytes(bulk_zip_url)
-    text = read_zip_member(payload, "FLAT_CMPL")
     n = 0
-    for row in parse_flat_file(text, COMPLAINTS_COLUMNS):
-        n += 1
-        yield row
+    with stream_zip_member(payload, "FLAT_CMPL") as fh:
+        for row in parse_flat_file(fh, COMPLAINTS_COLUMNS):
+            n += 1
+            yield row
     logger.info(f"Complaints bulk yielded {n:,} rows")
 
 

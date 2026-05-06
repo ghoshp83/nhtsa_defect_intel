@@ -24,7 +24,7 @@ variables:
     default: PAUSED
   warehouse_id:
     description: SQL warehouse ID used by the dashboard + Genie tool
-    default: 96e26e80fcd91931
+    default: f871f96e97724dca
 
 include:
   - resources/*.yml
@@ -44,7 +44,7 @@ targets:
   dev:
     mode: development
     workspace:
-      host: https://dbc-b1b2f91a-d102.cloud.databricks.com/
+      host: https://dbc-5604c867-d90d.cloud.databricks.com
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.target}/${bundle.name}
     run_as:
       user_name: ${workspace.current_user.userName}
@@ -52,14 +52,14 @@ targets:
   acc:
     mode: production
     workspace:
-      host: https://dbc-b1b2f91a-d102.cloud.databricks.com
+      host: https://dbc-5604c867-d90d.cloud.databricks.com
       root_path: /Shared/.bundle/${bundle.target}/${bundle.name}
     variables:
       schedule_pause_status: PAUSED
 
   prd:
     workspace:
-      host: https://dbc-b1b2f91a-d102.cloud.databricks.com
+      host: https://dbc-5604c867-d90d.cloud.databricks.com
       root_path: /Shared/.bundle/${bundle.target}/${bundle.name}
     variables:
       schedule_pause_status: UNPAUSED

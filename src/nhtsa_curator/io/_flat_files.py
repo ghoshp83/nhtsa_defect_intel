@@ -11,12 +11,13 @@ If NHTSA changes a layout, only the column lists below need updating.
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import io
 import re
 import sys
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 # Delta rejects column names containing ` ,;{}()\n\t=`; SGO headers also
@@ -176,17 +177,24 @@ TSBS_COLUMNS: tuple[str, ...] = (
 
 
 def parse_flat_file(
-    text: str,
+    source: str | Iterable[str],
     columns: tuple[str, ...],
     delimiter: str = "\t",
 ) -> Iterator[dict]:
     """Yield one dict per non-empty line in a tab-delimited NHTSA file.
 
+    ``source`` may be a full string or any iterable of lines (e.g. an open
+    text-mode file handle). Streaming a file handle avoids materialising
+    the entire decompressed payload in driver memory — needed for the
+    ~1–2 GB FLAT_CMPL complaints dump.
+
     Tolerant of trailing delimiters and extra columns: rows shorter
     than the column tuple are padded with ``None``; rows longer have
     the trailing fields packed into ``_overflow``.
     """
-    reader = csv.reader(io.StringIO(text), delimiter=delimiter, quotechar='"')
+    if isinstance(source, str):
+        source = io.StringIO(source)
+    reader = csv.reader(source, delimiter=delimiter, quotechar='"')
     for raw in reader:
         if not raw or all(not c for c in raw):
             continue
@@ -222,3 +230,29 @@ def read_zip_file(path: str | Path, member_pattern: str) -> str:
     with open(path, "rb") as fh:
         data = fh.read()
     return read_zip_member(data, member_pattern)
+
+
+@contextlib.contextmanager
+def stream_zip_member(
+    zip_bytes: bytes, member_pattern: str
+) -> Iterator[io.TextIOBase]:
+    """Yield a text-mode stream for the first matching zip member.
+
+    Unlike :func:`read_zip_member`, this never materialises the full
+    decompressed payload as a Python ``str`` — decompression happens
+    lazily as the consumer iterates lines. Use this for the large
+    FLAT_CMPL dump where the in-memory text would push the driver to OOM.
+    """
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        target = next(
+            (n for n in zf.namelist() if member_pattern.lower() in n.lower()),
+            None,
+        )
+        if target is None:
+            raise FileNotFoundError(
+                f"No member matching '{member_pattern}' in zip (members: {zf.namelist()})"
+            )
+        with zf.open(target) as raw:
+            yield io.TextIOWrapper(
+                raw, encoding="latin-1", errors="replace", newline=""
+            )

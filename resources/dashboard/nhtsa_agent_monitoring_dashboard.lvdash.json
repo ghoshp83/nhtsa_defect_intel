@@ -463,7 +463,7 @@
                   ],
                   "disaggregated": true,
                   "orders": [
-                    {"fieldName": "request_time", "direction": "DESC"}
+                    {"fieldName": "request_time", "expression": "`request_time`", "direction": "DESC"}
                   ]
                 }
               }

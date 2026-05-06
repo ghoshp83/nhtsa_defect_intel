@@ -44,10 +44,10 @@ dev:
   volume: nhtsa_files
   llm_endpoint: databricks-llama-4-maverick
   embedding_endpoint: databricks-gte-large-en
-  warehouse_id: 96e26e80fcd91931
+  warehouse_id: f871f96e97724dca
   vector_search_endpoint: llmops_course_vs_endpoint
   genie_space_id: "01f13b775eef1f7ebd44fa63a28d7db6"
-  usage_policy_id: 4f4f43f7-3b6f-4f0a-9dd3-f8a271a90fb3
+  usage_policy_id: 849bc38c-794f-4232-9ab3-cca689a3da65
   lakebase_project_id: nhtsa-agent-lakebase-pg
   experiment_name: /Shared/nhtsa-curator-course-pg
 
