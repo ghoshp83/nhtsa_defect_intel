@@ -79,4 +79,4 @@ resources:
             base_parameters:
               env: ${bundle.target}
               run_id: "{{job.run_id}}"
-              max_docs_per_run: "100"
+              max_docs_per_run: "1000"

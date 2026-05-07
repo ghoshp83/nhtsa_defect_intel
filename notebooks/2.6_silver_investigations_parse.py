@@ -21,7 +21,7 @@ spark = SparkSession.builder.getOrCreate()
 
 dbutils.widgets.text("env", "dev")
 dbutils.widgets.text("run_id", "manual")
-dbutils.widgets.text("max_docs_per_run", "100")
+dbutils.widgets.text("max_docs_per_run", "500")
 env = get_env(spark)
 max_docs = int(dbutils.widgets.get("max_docs_per_run"))
 

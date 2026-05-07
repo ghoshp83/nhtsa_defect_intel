@@ -112,28 +112,72 @@ def parse_documents(
     if n_todo == 0:
         return {"queued": 0, "parsed_ok": 0, "parsed_err": 0}
 
-    # Read PDF bytes from the UC volume via binaryFile, join to the queue
-    # so we keep the doc_id alongside the parsed payload.
-    todo.createOrReplaceTempView(f"_{dataset}_todo")
+    # Read PDF bytes from the UC volume on the driver (batch is bounded by
+    # max_docs_per_run so memory stays modest), then materialise as a Spark
+    # DataFrame for ai_parse_document. The previous SQL-side
+    # `read_files(t.volume_path, format => 'binaryFile').content` pattern
+    # doesn't resolve on serverless Spark Connect — read_files is a TVF that
+    # needs FROM-clause usage and `.content` scalar access isn't supported.
+    pdf_rows: list[tuple[str, str, bytes]] = []
+    for r in todo.collect():
+        try:
+            with open(r["volume_path"], "rb") as fh:
+                pdf_rows.append((r["doc_id"], r["volume_path"], fh.read()))
+        except FileNotFoundError:
+            logger.warning(
+                f"[{dataset}] PDF missing on disk, skipping: {r['volume_path']}"
+            )
+    if not pdf_rows:
+        logger.info(f"[{dataset}] all queued PDFs missing on disk; nothing to parse")
+        return {"queued": n_todo, "parsed_ok": 0, "parsed_err": n_todo}
 
+    pdfs_df = spark.createDataFrame(
+        pdf_rows, "doc_id string, volume_path string, content binary"
+    )
+    pdfs_df.createOrReplaceTempView(f"_{dataset}_pdfs")
+
+    # ai_parse_document returns VARIANT (Databricks changed it from STRUCT).
+    # Extract full_text by concatenating per-element text values; fall back
+    # to a top-level `text` field or the raw JSON if the document.elements
+    # path isn't present. The raw VARIANT is also kept so downstream code
+    # can navigate any field without re-parsing.
     parsed = spark.sql(f"""
         WITH pdfs AS (
             SELECT
-                t.doc_id,
-                t.volume_path,
-                ai_parse_document(
-                    read_files(t.volume_path, format => 'binaryFile').content
-                ) AS parsed
-            FROM _{dataset}_todo t
+                doc_id,
+                volume_path,
+                ai_parse_document(content) AS parsed
+            FROM _{dataset}_pdfs
         )
         SELECT
             doc_id,
             volume_path,
-            parsed.text          AS full_text,
-            parsed.pages         AS pages,
-            parsed.metadata      AS doc_metadata,
-            current_timestamp()  AS parsed_at,
-            '{parser_version}'   AS parser_version
+            coalesce(
+                nullif(
+                    array_join(
+                        transform(
+                            filter(
+                                try_cast(
+                                    parsed:document:elements
+                                    AS array<struct<content: string, description: string, type: string>>
+                                ),
+                                x -> x.type NOT IN ('page_footer', 'page_number')
+                                  AND coalesce(nullif(x.content, ''), x.description) IS NOT NULL
+                            ),
+                            x -> coalesce(nullif(x.content, ''), x.description)
+                        ),
+                        '\n'
+                    ),
+                    ''
+                ),
+                try_variant_get(parsed, '$.text', 'string'),
+                to_json(parsed)
+            ) AS full_text,
+            parsed:document:pages AS pages,
+            parsed:metadata       AS doc_metadata,
+            parsed                AS parsed_raw,
+            current_timestamp()   AS parsed_at,
+            '{parser_version}'    AS parser_version
         FROM pdfs
     """)
 
