@@ -31,6 +31,14 @@ from pyspark.sql import types as T
 
 from .config import ProjectConfig
 
+# Spark Connect has a 3 GB hard cap on local-relation payloads (the bytes
+# pushed via spark.createDataFrame). NHTSA PDFs average ~3.5 MB, so chunks of
+# ~100 keep each createDataFrame call near 350 MB — well clear of the limit
+# even with size variance. The user-facing max_docs_per_run is the OUTER cap;
+# this is just an internal materialisation guardrail.
+_INTERNAL_CHUNK_SIZE = 100
+
+
 _TRACKER_SCHEMA = T.StructType(
     [
         T.StructField("doc_id", T.StringType(), False),
@@ -112,102 +120,106 @@ def parse_documents(
     if n_todo == 0:
         return {"queued": 0, "parsed_ok": 0, "parsed_err": 0}
 
-    # Read PDF bytes from the UC volume on the driver (batch is bounded by
-    # max_docs_per_run so memory stays modest), then materialise as a Spark
-    # DataFrame for ai_parse_document. The previous SQL-side
-    # `read_files(t.volume_path, format => 'binaryFile').content` pattern
-    # doesn't resolve on serverless Spark Connect — read_files is a TVF that
-    # needs FROM-clause usage and `.content` scalar access isn't supported.
-    pdf_rows: list[tuple[str, str, bytes]] = []
-    for r in todo.collect():
-        try:
-            with open(r["volume_path"], "rb") as fh:
-                pdf_rows.append((r["doc_id"], r["volume_path"], fh.read()))
-        except FileNotFoundError:
-            logger.warning(
-                f"[{dataset}] PDF missing on disk, skipping: {r['volume_path']}"
+    # Read PDF bytes from the UC volume on the driver, materialise as a Spark
+    # DataFrame, run ai_parse_document via SQL. Process in internal chunks so
+    # the createDataFrame payload stays under Spark Connect's 3 GB local-relation
+    # cap (PDFs average ~3.5 MB, so chunks of 100 = ~350 MB, well clear of the
+    # limit even with size variance). The user-facing max_docs_per_run cap is
+    # the OUTER bound; this chunking is just to keep each materialisation small.
+    todo_rows = todo.collect()
+    n_ok = 0
+    for chunk_start in range(0, len(todo_rows), _INTERNAL_CHUNK_SIZE):
+        chunk = todo_rows[chunk_start : chunk_start + _INTERNAL_CHUNK_SIZE]
+        pdf_rows: list[tuple[str, str, bytes]] = []
+        for r in chunk:
+            try:
+                with open(r["volume_path"], "rb") as fh:
+                    pdf_rows.append((r["doc_id"], r["volume_path"], fh.read()))
+            except FileNotFoundError:
+                logger.warning(
+                    f"[{dataset}] PDF missing on disk, skipping: {r['volume_path']}"
+                )
+        if not pdf_rows:
+            continue
+
+        pdfs_df = spark.createDataFrame(
+            pdf_rows, "doc_id string, volume_path string, content binary"
+        )
+        pdfs_df.createOrReplaceTempView(f"_{dataset}_pdfs")
+
+        # ai_parse_document returns VARIANT (Databricks changed it from STRUCT).
+        # Extract full_text by concatenating per-element content/description;
+        # fall back to a top-level `text` field or the raw JSON if neither path
+        # is present. Raw VARIANT is also kept in `parsed_raw` so downstream
+        # code can navigate any field without re-parsing.
+        parsed = spark.sql(f"""
+            WITH pdfs AS (
+                SELECT
+                    doc_id,
+                    volume_path,
+                    ai_parse_document(content) AS parsed
+                FROM _{dataset}_pdfs
             )
-    if not pdf_rows:
-        logger.info(f"[{dataset}] all queued PDFs missing on disk; nothing to parse")
-        return {"queued": n_todo, "parsed_ok": 0, "parsed_err": n_todo}
-
-    pdfs_df = spark.createDataFrame(
-        pdf_rows, "doc_id string, volume_path string, content binary"
-    )
-    pdfs_df.createOrReplaceTempView(f"_{dataset}_pdfs")
-
-    # ai_parse_document returns VARIANT (Databricks changed it from STRUCT).
-    # Extract full_text by concatenating per-element text values; fall back
-    # to a top-level `text` field or the raw JSON if the document.elements
-    # path isn't present. The raw VARIANT is also kept so downstream code
-    # can navigate any field without re-parsing.
-    parsed = spark.sql(f"""
-        WITH pdfs AS (
             SELECT
                 doc_id,
                 volume_path,
-                ai_parse_document(content) AS parsed
-            FROM _{dataset}_pdfs
-        )
-        SELECT
-            doc_id,
-            volume_path,
-            coalesce(
-                nullif(
-                    array_join(
-                        transform(
-                            filter(
-                                try_cast(
-                                    parsed:document:elements
-                                    AS array<struct<content: string, description: string, type: string>>
+                coalesce(
+                    nullif(
+                        array_join(
+                            transform(
+                                filter(
+                                    try_cast(
+                                        parsed:document:elements
+                                        AS array<struct<content: string, description: string, type: string>>
+                                    ),
+                                    x -> x.type NOT IN ('page_footer', 'page_number')
+                                      AND coalesce(nullif(x.content, ''), x.description) IS NOT NULL
                                 ),
-                                x -> x.type NOT IN ('page_footer', 'page_number')
-                                  AND coalesce(nullif(x.content, ''), x.description) IS NOT NULL
+                                x -> coalesce(nullif(x.content, ''), x.description)
                             ),
-                            x -> coalesce(nullif(x.content, ''), x.description)
+                            '\n'
                         ),
-                        '\n'
+                        ''
                     ),
-                    ''
-                ),
-                try_variant_get(parsed, '$.text', 'string'),
-                to_json(parsed)
-            ) AS full_text,
-            parsed:document:pages AS pages,
-            parsed:metadata       AS doc_metadata,
-            parsed                AS parsed_raw,
-            current_timestamp()   AS parsed_at,
-            '{parser_version}'    AS parser_version
-        FROM pdfs
-    """)
+                    try_variant_get(parsed, '$.text', 'string'),
+                    to_json(parsed)
+                ) AS full_text,
+                parsed:document:pages AS pages,
+                parsed:metadata       AS doc_metadata,
+                parsed                AS parsed_raw,
+                current_timestamp()   AS parsed_at,
+                '{parser_version}'    AS parser_version
+            FROM pdfs
+        """)
 
-    # Persist parse outputs (append) and tracker rows in lockstep.
-    if not spark.catalog.tableExists(parsed_table):
-        # Materialise schema from the first batch so we don't have to
-        # hand-maintain the ai_parse_document return shape.
-        parsed.limit(0).write.format("delta").option(
-            "delta.enableChangeDataFeed", "true"
-        ).saveAsTable(parsed_table)
-        logger.info(f"Created {parsed_table}")
+        if not spark.catalog.tableExists(parsed_table):
+            parsed.limit(0).write.format("delta").option(
+                "delta.enableChangeDataFeed", "true"
+            ).saveAsTable(parsed_table)
+            logger.info(f"Created {parsed_table}")
 
-    # We can't easily distinguish per-row failure inside ai_parse_document
-    # from here — Databricks raises on the whole call. We assume success
-    # on the rows that materialise. Failures bubble up to the notebook
-    # and the tracker isn't updated, so the next run will retry.
-    parsed.write.mode("append").saveAsTable(parsed_table)
+        # Persist parse outputs and tracker rows in lockstep per chunk so a
+        # mid-run failure leaves us with a consistent state we can resume from.
+        parsed.write.mode("append").saveAsTable(parsed_table)
 
-    tracker_rows = parsed.select(
-        F.col("doc_id"),
-        F.col("volume_path"),
-        F.col("parsed_at"),
-        F.col("parser_version"),
-        F.lit("ok").alias("parse_status"),
-        F.lit(None).cast("string").alias("error_message"),
-    )
-    tracker_rows.write.mode("append").saveAsTable(tracker_table)
+        tracker_rows = parsed.select(
+            F.col("doc_id"),
+            F.col("volume_path"),
+            F.col("parsed_at"),
+            F.col("parser_version"),
+            F.lit("ok").alias("parse_status"),
+            F.lit(None).cast("string").alias("error_message"),
+        )
+        tracker_rows.write.mode("append").saveAsTable(tracker_table)
 
-    n_ok = tracker_rows.count()
-    logger.info(f"[{dataset}] parsed_ok={n_ok}")
+        chunk_ok = tracker_rows.count()
+        n_ok += chunk_ok
+        logger.info(
+            f"[{dataset}] chunk {chunk_start // _INTERNAL_CHUNK_SIZE + 1}: "
+            f"parsed {chunk_ok} (running total: {n_ok})"
+        )
+
+    logger.info(f"[{dataset}] parsed_ok={n_ok} of {n_todo} queued")
     return {"queued": n_todo, "parsed_ok": n_ok, "parsed_err": n_todo - n_ok}
 
 
