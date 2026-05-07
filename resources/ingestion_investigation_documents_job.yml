@@ -30,5 +30,5 @@ resources:
             base_parameters:
               env: ${bundle.target}
               run_id: "{{job.run_id}}"
-              max_docs_per_run: "200"
-              listing_url_template: "https://api.nhtsa.gov/odi/actions/{action_number}/documents"
+              max_docs_per_run: "10000"
+              listing_url_template: "https://api.nhtsa.gov/safetyIssues/byNhtsaId?name=&nhtsaId={action_number}"

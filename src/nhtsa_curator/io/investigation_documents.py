@@ -58,11 +58,44 @@ def _doc_id(action_number: str, pdf_url: str) -> str:
 def _extract_from_json(payload: object) -> Iterator[tuple[str, str | None]]:
     """Yield ``(url, title)`` pairs from the NHTSA ODI documents JSON.
 
-    Schema accepted, in order of preference: a top-level ``documents``
-    array, a ``results`` array, or a bare array. Each item is expected
-    to have a ``url`` / ``documentUrl`` / ``documentURL`` field and
-    optionally a ``title`` / ``documentTitle``.
+    Two shapes are supported:
+
+    1. NHTSA's current ``safetyIssues/byNhtsaId`` envelope::
+
+           {"results": [{"investigations": [{"associatedDocuments": [
+               {"url": ..., "summary": ..., "fileName": ...},
+           ]}]}]}
+
+    2. Generic flat shapes — top-level ``documents`` / ``results`` /
+       ``data`` / ``items`` array, or a bare list, where each item has
+       a ``url`` / ``documentUrl`` / ``href`` field. Kept for resilience
+       in case NHTSA rotates the endpoint again.
     """
+    # 1. NHTSA safetyIssues envelope.
+    if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+        nhtsa_yielded = False
+        for result in payload["results"]:
+            if not isinstance(result, dict):
+                continue
+            for inv in result.get("investigations") or []:
+                if not isinstance(inv, dict):
+                    continue
+                for doc in inv.get("associatedDocuments") or []:
+                    if not isinstance(doc, dict):
+                        continue
+                    url = doc.get("url")
+                    if not url:
+                        continue
+                    title = doc.get("summary") or doc.get("fileName")
+                    nhtsa_yielded = True
+                    yield str(url), (str(title) if title else None)
+        if nhtsa_yielded:
+            return
+        # NHTSA shape with no docs — fall through so the generic logic
+        # has a chance on payloads that just happen to share the
+        # ``results`` key but with a different inner schema.
+
+    # 2. Generic flat shapes.
     if isinstance(payload, dict):
         for key in ("documents", "results", "data", "items"):
             if isinstance(payload.get(key), list):

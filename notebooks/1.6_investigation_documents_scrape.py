@@ -32,13 +32,13 @@ spark = SparkSession.builder.getOrCreate()
 
 dbutils.widgets.text("env", "dev")
 dbutils.widgets.text("run_id", "manual")
-dbutils.widgets.text("max_docs_per_run", "200")
+dbutils.widgets.text("max_docs_per_run", "10000")
 # NHTSA ODI documents listing endpoint. JSON is preferred; the scraper
 # falls back to HTML link scraping if the payload isn't JSON. Update
 # here (not in code) if NHTSA rotates the path.
 dbutils.widgets.text(
     "listing_url_template",
-    "https://api.nhtsa.gov/odi/actions/{action_number}/documents",
+    "https://api.nhtsa.gov/safetyIssues/byNhtsaId?name=&nhtsaId={action_number}",
 )
 
 env = get_env(spark)
@@ -61,12 +61,14 @@ if spark.catalog.tableExists(docs_table):
         LEFT ANTI JOIN {docs_table} d
           ON i.nhtsa_action_number = d.nhtsa_action_number
         WHERE i.nhtsa_action_number IS NOT NULL
+          AND i.action_open_date >= '20200101'
     """)
 else:
     unscraped_df = spark.sql(f"""
         SELECT DISTINCT nhtsa_action_number
         FROM {cfg.full_schema_name}.bronze_investigations
         WHERE nhtsa_action_number IS NOT NULL
+          AND action_open_date >= '20200101'
     """)
 
 action_numbers = [r["nhtsa_action_number"] for r in unscraped_df.collect()]
