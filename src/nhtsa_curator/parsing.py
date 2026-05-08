@@ -31,12 +31,15 @@ from pyspark.sql import types as T
 
 from .config import ProjectConfig
 
-# Spark Connect has a 3 GB hard cap on local-relation payloads (the bytes
-# pushed via spark.createDataFrame). NHTSA PDFs average ~3.5 MB, so chunks of
-# ~100 keep each createDataFrame call near 350 MB — well clear of the limit
-# even with size variance. The user-facing max_docs_per_run is the OUTER cap;
-# this is just an internal materialisation guardrail.
-_INTERNAL_CHUNK_SIZE = 100
+# Two reasons for chunking:
+# 1. Spark Connect has a 3 GB hard cap on local-relation payloads (the bytes
+#    pushed via spark.createDataFrame). NHTSA PDFs average ~3.5 MB, so chunks
+#    of 25 keep each createDataFrame call near ~90 MB — well clear of the cap.
+# 2. Smaller chunks bound the blast radius when ai_parse_document stalls on
+#    a poison PDF: a chunk failure now wastes 25 docs of effort, not 100, and
+#    the next chunk is still attempted (see try/except in parse_documents).
+# The user-facing max_docs_per_run is the OUTER cap.
+_INTERNAL_CHUNK_SIZE = 25
 
 
 _TRACKER_SCHEMA = T.StructType(
@@ -120,15 +123,11 @@ def parse_documents(
     if n_todo == 0:
         return {"queued": 0, "parsed_ok": 0, "parsed_err": 0}
 
-    # Read PDF bytes from the UC volume on the driver, materialise as a Spark
-    # DataFrame, run ai_parse_document via SQL. Process in internal chunks so
-    # the createDataFrame payload stays under Spark Connect's 3 GB local-relation
-    # cap (PDFs average ~3.5 MB, so chunks of 100 = ~350 MB, well clear of the
-    # limit even with size variance). The user-facing max_docs_per_run cap is
-    # the OUTER bound; this chunking is just to keep each materialisation small.
     todo_rows = todo.collect()
     n_ok = 0
+    n_err = 0
     for chunk_start in range(0, len(todo_rows), _INTERNAL_CHUNK_SIZE):
+        chunk_idx = chunk_start // _INTERNAL_CHUNK_SIZE + 1
         chunk = todo_rows[chunk_start : chunk_start + _INTERNAL_CHUNK_SIZE]
         pdf_rows: list[tuple[str, str, bytes]] = []
         for r in chunk:
@@ -198,29 +197,54 @@ def parse_documents(
             ).saveAsTable(parsed_table)
             logger.info(f"Created {parsed_table}")
 
-        # Persist parse outputs and tracker rows in lockstep per chunk so a
-        # mid-run failure leaves us with a consistent state we can resume from.
-        parsed.write.mode("append").saveAsTable(parsed_table)
+        # Per-chunk try/except: if ai_parse_document stalls on a poison PDF,
+        # mark the chunk's docs as parse_status=error in the tracker so the
+        # next run skips them (LEFT ANTI JOIN). Without this, a bad PDF would
+        # block the same batch on every rerun and the queue never drains.
+        try:
+            parsed.write.mode("append").saveAsTable(parsed_table)
+            tracker_rows = parsed.select(
+                F.col("doc_id"),
+                F.col("volume_path"),
+                F.col("parsed_at"),
+                F.col("parser_version"),
+                F.lit("ok").alias("parse_status"),
+                F.lit(None).cast("string").alias("error_message"),
+            )
+            tracker_rows.write.mode("append").saveAsTable(tracker_table)
+            chunk_ok = tracker_rows.count()
+            n_ok += chunk_ok
+            logger.info(
+                f"[{dataset}] chunk {chunk_idx}: parsed {chunk_ok} "
+                f"(running total ok={n_ok})"
+            )
+        except Exception as exc:
+            err_msg = str(exc)[:1000]
+            logger.error(
+                f"[{dataset}] chunk {chunk_idx} failed ({len(pdf_rows)} docs): "
+                f"{err_msg[:200]}"
+            )
+            err_df = spark.createDataFrame(
+                [(doc_id, vp) for doc_id, vp, _ in pdf_rows],
+                "doc_id string, volume_path string",
+            ).select(
+                F.col("doc_id"),
+                F.col("volume_path"),
+                F.current_timestamp().alias("parsed_at"),
+                F.lit(parser_version).alias("parser_version"),
+                F.lit("error").alias("parse_status"),
+                F.lit(err_msg).alias("error_message"),
+            )
+            err_df.write.mode("append").saveAsTable(tracker_table)
+            n_err += len(pdf_rows)
+            logger.warning(
+                f"[{dataset}] marked {len(pdf_rows)} docs as parse_status=error"
+            )
 
-        tracker_rows = parsed.select(
-            F.col("doc_id"),
-            F.col("volume_path"),
-            F.col("parsed_at"),
-            F.col("parser_version"),
-            F.lit("ok").alias("parse_status"),
-            F.lit(None).cast("string").alias("error_message"),
-        )
-        tracker_rows.write.mode("append").saveAsTable(tracker_table)
-
-        chunk_ok = tracker_rows.count()
-        n_ok += chunk_ok
-        logger.info(
-            f"[{dataset}] chunk {chunk_start // _INTERNAL_CHUNK_SIZE + 1}: "
-            f"parsed {chunk_ok} (running total: {n_ok})"
-        )
-
-    logger.info(f"[{dataset}] parsed_ok={n_ok} of {n_todo} queued")
-    return {"queued": n_todo, "parsed_ok": n_ok, "parsed_err": n_todo - n_ok}
+    logger.info(
+        f"[{dataset}] parsed_ok={n_ok}, parsed_err={n_err}, queued={n_todo}"
+    )
+    return {"queued": n_todo, "parsed_ok": n_ok, "parsed_err": n_err}
 
 
 # ---------------------------------------------------------------------------
