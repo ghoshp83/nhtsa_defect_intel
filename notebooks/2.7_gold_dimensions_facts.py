@@ -13,6 +13,8 @@
 # MAGIC | fact  | `gold_recalls_fact`         |
 # MAGIC | fact  | `gold_complaints_fact`      |
 # MAGIC | fact  | `gold_investigations_fact`  |
+# MAGIC | fact  | `gold_tsbs_fact`            |
+# MAGIC | fact  | `gold_sgo_av_crashes`       |
 # MAGIC
 # MAGIC Surrogate keys are deterministic xxhash64 digests so re-runs
 # MAGIC produce stable joins. Order matters: dims first, then facts.
@@ -29,6 +31,8 @@ from nhtsa_curator.gold import (
     write_gold_complaints_fact,
     write_gold_investigations_fact,
     write_gold_recalls_fact,
+    write_gold_sgo_av_crashes,
+    write_gold_tsbs_fact,
 )
 
 # COMMAND ----------
@@ -52,6 +56,8 @@ write_dim_date(spark, cfg)
 write_gold_recalls_fact(spark, cfg)
 write_gold_complaints_fact(spark, cfg)
 write_gold_investigations_fact(spark, cfg)
+write_gold_tsbs_fact(spark, cfg)
+write_gold_sgo_av_crashes(spark, cfg)
 
 # COMMAND ----------
 display(
@@ -62,6 +68,8 @@ display(
     SELECT 'dim_date',               count(*)         FROM {cfg.full_schema_name}.dim_date           UNION ALL
     SELECT 'gold_recalls_fact',      count(*)         FROM {cfg.full_schema_name}.gold_recalls_fact      UNION ALL
     SELECT 'gold_complaints_fact',   count(*)         FROM {cfg.full_schema_name}.gold_complaints_fact   UNION ALL
-    SELECT 'gold_investigations_fact', count(*)       FROM {cfg.full_schema_name}.gold_investigations_fact
+    SELECT 'gold_investigations_fact', count(*)       FROM {cfg.full_schema_name}.gold_investigations_fact UNION ALL
+    SELECT 'gold_tsbs_fact',         count(*)         FROM {cfg.full_schema_name}.gold_tsbs_fact            UNION ALL
+    SELECT 'gold_sgo_av_crashes',    count(*)         FROM {cfg.full_schema_name}.gold_sgo_av_crashes
 """)
 )

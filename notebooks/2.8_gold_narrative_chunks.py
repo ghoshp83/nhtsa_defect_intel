@@ -26,11 +26,17 @@ spark = SparkSession.builder.getOrCreate()
 
 dbutils.widgets.text("env", "dev")
 dbutils.widgets.text("run_id", "manual")
-# sample_total=0 → full production build. Non-zero → stratified sample
-# across source_dataset (complaints 60% / investigation 30% / tsb 10%).
-# Used to keep dev/demo builds embeddable within a day on the shared
-# Foundation Models endpoint (full corpus ≈ 8.75M chunks → ~weeks).
-dbutils.widgets.text("sample_total", "0")
+# sample_total=0 → full production build (~8.83M chunks; embeds in weeks
+# on the shared Foundation Models endpoint).
+# sample_total>0 → stratified sample across source_dataset. Default is 500K
+# which embeds in ~24h and is the portfolio-friendly cut. Split is weighted
+# toward the big narrative sources; small sources (investigation, sgo) cap
+# at their actual size and effectively flow through full:
+#   complaints     40%  → big corpus, rich consumer narratives
+#   tsb            40%  → big corpus, technical bulletins
+#   investigation  15%  → small; full ~23.8K passes through
+#   sgo             5%  → small; full ~6.4K passes through (AV crashes)
+dbutils.widgets.text("sample_total", "500000")
 env = get_env(spark)
 
 cfg = load_config("../project_config.yml", env)
@@ -42,9 +48,10 @@ chunking = ChunkingConfig(**raw["chunking"])
 sample_total = int(dbutils.widgets.get("sample_total"))
 sample_per_source = (
     {
-        "complaints": int(sample_total * 0.60),
-        "investigation": int(sample_total * 0.30),
-        "tsb": int(sample_total * 0.10),
+        "complaints": int(sample_total * 0.40),
+        "tsb": int(sample_total * 0.40),
+        "investigation": int(sample_total * 0.15),
+        "sgo": int(sample_total * 0.05),
     }
     if sample_total > 0
     else None

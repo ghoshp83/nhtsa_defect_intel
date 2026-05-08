@@ -115,8 +115,22 @@ def _yyyymmdd(col: str) -> F.Column:
     plain ``to_date`` throws ``CANNOT_PARSE_TIMESTAMP`` on those rows
     and aborts the entire job; ``try_to_date`` coerces the bad value to
     NULL, which is what downstream expects.
+
+    Result is also NULL for parsed dates outside [1950-01-01, current_date
+    + 1 year] — NHTSA flat files occasionally carry digit-transposition
+    typos like ``00031020`` (year 3 AD, intended 2003-10-20) and ``22030726``
+    (year 2203, intended 2023-07-26) that ``try_to_date`` happily parses as
+    real DATEs. Such artefacts bloat ``dim_date`` and skew event-date
+    aggregations, so we clamp them at the silver layer rather than letting
+    them leak into gold. The +1y upper buffer leaves room for legitimate
+    forward-dated recall effective dates while killing far-future garbage.
     """
-    return F.expr(f"try_to_date({col}, 'yyyyMMdd')")
+    parsed = F.expr(f"try_to_date({col}, 'yyyyMMdd')")
+    return F.when(
+        (parsed >= F.to_date(F.lit("1950-01-01")))
+        & (parsed <= F.expr("current_date() + INTERVAL 1 YEAR")),
+        parsed,
+    )
 
 
 def _try_int(col: str) -> F.Column:

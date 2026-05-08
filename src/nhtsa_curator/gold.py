@@ -13,12 +13,15 @@ Two distinct shapes live here:
        - gold_recalls_fact
        - gold_complaints_fact
        - gold_investigations_fact
+       - gold_tsbs_fact
+       - gold_sgo_av_crashes
 
 2. **Narrative chunks** (``gold_narrative_chunks``) — the *only* table
    the Vector Search index reads. Sources:
        - silver_complaints.narrative_clean
        - silver_tsb_parsed.full_text (with metadata join from silver_tsbs)
        - silver_investigation_parsed.full_text
+       - silver_sgo_crashes.narrative (when present)
 
    Each chunk carries the metadata columns the agent will use as
    filters (``make_norm``, ``model_year``, ``component_group``,
@@ -156,12 +159,18 @@ def write_dim_oem_group(spark: SparkSession, cfg: ProjectConfig) -> int:
 def write_dim_date(spark: SparkSession, cfg: ProjectConfig) -> int:
     """Calendar dim spanning the union of date columns across silver."""
     schema = cfg.full_schema_name
+    # ``d_min`` is floored to 1950-01-01 because NHTSA's earliest legitimate
+    # records are from ~1949; rows older than that are parsing artefacts (year
+    # 0001, year 0, etc.) that would otherwise blow dim_date out to ~800k rows.
     bounds = spark.sql(f"""
         SELECT
-            LEAST(
-                (SELECT min(record_creation_date) FROM {schema}.silver_recalls),
-                (SELECT min(incident_date)        FROM {schema}.silver_complaints),
-                (SELECT min(open_date)            FROM {schema}.silver_investigations)
+            GREATEST(
+                LEAST(
+                    (SELECT min(record_creation_date) FROM {schema}.silver_recalls),
+                    (SELECT min(incident_date)        FROM {schema}.silver_complaints),
+                    (SELECT min(open_date)            FROM {schema}.silver_investigations)
+                ),
+                DATE '1950-01-01'
             ) AS d_min,
             GREATEST(
                 (SELECT max(record_creation_date) FROM {schema}.silver_recalls),
@@ -262,6 +271,41 @@ def write_gold_complaints_fact(spark: SparkSession, cfg: ProjectConfig) -> int:
     return n
 
 
+def write_gold_tsbs_fact(spark: SparkSession, cfg: ProjectConfig) -> int:
+    """Build ``gold_tsbs_fact`` — TSB metadata joined to the star schema.
+
+    silver_tsbs (~5.6M rows) is wide; the narrative ``summary`` flows into
+    ``gold_narrative_chunks`` for vector search. This fact is the structured
+    surface Genie SQL queries against ("how many TSBs about brake actuators
+    on Ford F-150 since 2022"). Measure-light by design — TSBs don't carry
+    casualty counts.
+    """
+    src = spark.table(f"{cfg.full_schema_name}.silver_tsbs")
+    # silver_tsbs uses ``component_raw`` while ``_component_key`` expects
+    # ``component_leaf`` (same convention dim_component already adopts).
+    src = src.withColumnRenamed("component_raw", "component_leaf")
+    fact = _join_keys(src).select(
+        "tsb_id",
+        "nhtsa_item_number",
+        "replacement_bulletin_no",
+        "vehicle_key",
+        "component_id",
+        "oem_group_id",
+        F.col("original_date").alias("event_date"),
+        "communication_type",
+        "mfr_component_system",
+        "mfr_component_subsystem",
+        "bulletin_year",
+    )
+    table = f"{cfg.full_schema_name}.gold_tsbs_fact"
+    fact.write.format("delta").mode("overwrite").option(
+        "overwriteSchema", "true"
+    ).partitionBy("bulletin_year").saveAsTable(table)
+    n = spark.table(table).count()
+    logger.info(f"gold_tsbs_fact: {n:,} rows")
+    return n
+
+
 def write_gold_investigations_fact(spark: SparkSession, cfg: ProjectConfig) -> int:
     src = spark.table(f"{cfg.full_schema_name}.silver_investigations")
     src = (
@@ -287,6 +331,83 @@ def write_gold_investigations_fact(spark: SparkSession, cfg: ProjectConfig) -> i
     ).saveAsTable(table)
     n = spark.table(table).count()
     logger.info(f"gold_investigations_fact: {n:,} rows")
+    return n
+
+
+def write_gold_sgo_av_crashes(spark: SparkSession, cfg: ProjectConfig) -> int:
+    """Build ``gold_sgo_av_crashes`` — Standing General Order AV crash facts.
+
+    silver_sgo_crashes is CSV-header-driven (NHTSA changes columns between
+    snapshots), so this builder is defensive: required keys/dates are
+    mandatory, outcome/context columns are included only when present.
+
+    Component keys are deliberately omitted — SGO records AV-system events,
+    not part failures, so a synthetic component_id would create spurious
+    rows in component-rollup queries against dim_component.
+    """
+    silver_table = f"{cfg.full_schema_name}.silver_sgo_crashes"
+    src = spark.table(silver_table)
+    cols = set(src.columns)
+
+    # silver_sgo_crashes guarantees make_norm/oem_group/sae_level/incident_date_d
+    # but the CSV may or may not surface model + year — pad so vehicle_key
+    # always matches dim_vehicle's (make, model, year) hash.
+    if "model_norm" not in cols:
+        src = src.withColumn("model_norm", F.lit(None).cast("string"))
+    if "model_year" not in cols:
+        src = src.withColumn("model_year", F.lit(None).cast("int"))
+
+    base = (
+        src.withColumn("vehicle_key", _vehicle_key())
+        .withColumn(
+            "oem_group_id",
+            F.xxhash64(F.coalesce(F.col("oem_group"), F.lit("UNKNOWN"))),
+        )
+        .withColumnRenamed("incident_date_d", "event_date")
+    )
+
+    select_exprs: list = [
+        F.col("report_id"),
+        F.col("vehicle_key"),
+        F.col("oem_group_id"),
+        F.col("event_date"),
+        F.col("sae_level"),
+    ]
+    if "_sgo_source" in cols:
+        select_exprs.append(F.col("_sgo_source").alias("sgo_source"))
+
+    # Optional outcome/context columns, named per NHTSA's public SGO schema
+    # after safe_col() normalisation. Anything missing is silently dropped;
+    # we log the included set so a future column rename surfaces in the
+    # job log instead of silently truncating the fact's surface.
+    optional = [
+        "crash_with",
+        "highest_injury_severity_alleged",
+        "serious_injuries",
+        "fatalities",
+        "narrative",
+        "city",
+        "state",
+        "country",
+        "roadway_type",
+        "roadway_surface",
+        "lighting",
+        "weather",
+        "posted_speed_limit_mph",
+    ]
+    included_optional = [c for c in optional if c in cols]
+    select_exprs.extend(F.col(c) for c in included_optional)
+
+    fact = base.select(*select_exprs)
+    table = f"{cfg.full_schema_name}.gold_sgo_av_crashes"
+    fact.write.format("delta").mode("overwrite").option(
+        "overwriteSchema", "true"
+    ).saveAsTable(table)
+    n = spark.table(table).count()
+    logger.info(
+        f"gold_sgo_av_crashes: {n:,} rows; "
+        f"included optional cols: {included_optional}"
+    )
     return n
 
 
@@ -396,7 +517,31 @@ def write_gold_narrative_chunks(
     else:
         inv = None
 
-    parts = [cmpl] + [d for d in (tsb, inv) if d is not None]
+    # Source D — SGO AV crash narratives. Optional: SGO bronze is CSV-header-
+    # driven, so we only include this branch if silver_sgo_crashes carries a
+    # ``narrative`` column. Without this, the agent can't answer Tesla/Waymo
+    # AV crash questions even though the structured fact table exists.
+    sgo = None
+    sgo_silver = f"{cfg.full_schema_name}.silver_sgo_crashes"
+    if spark.catalog.tableExists(sgo_silver):
+        sgo_cols = set(spark.table(sgo_silver).columns)
+        if "narrative" in sgo_cols:
+            sgo = spark.sql(f"""
+                SELECT
+                    'sgo'                       AS source_dataset,
+                    report_id                   AS source_id,
+                    report_id                   AS parent_doc_id,
+                    narrative                   AS body,
+                    make_norm,
+                    CAST(NULL AS STRING)        AS model_norm,
+                    CAST(NULL AS INT)           AS model_year,
+                    CAST(NULL AS STRING)        AS component_group,
+                    oem_group,
+                    incident_date_d             AS event_date
+                FROM {sgo_silver}
+            """)
+
+    parts = [cmpl] + [d for d in (tsb, inv, sgo) if d is not None]
     union = parts[0]
     for p in parts[1:]:
         union = union.unionByName(p)
