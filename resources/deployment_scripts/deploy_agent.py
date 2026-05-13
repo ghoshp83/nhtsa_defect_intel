@@ -94,18 +94,14 @@ _delete_if_broken(endpoint_name)
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## databricks.agents.deploy
-# MAGIC The usage policy rate-limits + content-moderates the endpoint.
-# MAGIC
-# MAGIC Lakebase auth uses the ``dev_SPN`` service principal. The endpoint's
-# MAGIC built-in system SP has no Postgres role on the ``nhtsa-agent-
-# MAGIC lakebase-pg`` Project (MLflow's ``DatabricksLakebase`` resource
-# MAGIC auto-grant only works for the older Database Instance API, not
-# MAGIC the newer PostgresAPI Project model we use in 4.2). So we inject
-# MAGIC the SPN client_id + client_secret as env vars via
-# MAGIC ``{{secrets/dev_SPN/...}}`` refs, and ``serving.py._conn_factory``
-# MAGIC picks them up at pod start. The SPN must already have a Postgres
-# MAGIC role on the project — run ``notebooks/4.3_grant_dev_spn_lakebase.py``
-# MAGIC once to create it.
+# MAGIC First deploy on Free Edition workspace `dbc-5604c867-d90d` — no
+# MAGIC explicit Lakebase SP env vars and no PAT injection. The endpoint's
+# MAGIC auto-managed credentials are exposed to the container as
+# MAGIC `DATABRICKS_CLIENT_ID`/`_SECRET`, so `WorkspaceClient()` inside
+# MAGIC `serving.py` will auth as that SPN. If Genie SQL or Lakebase access
+# MAGIC fails at runtime with permission errors, the fix is to (a) create the
+# MAGIC required secret scopes here and (b) re-add the env vars to force PAT
+# MAGIC auth / supply Lakebase SPN creds — same pattern as the prior workspace.
 
 # COMMAND ----------
 # prd keeps one warm replica; dev/acc scale to zero between demos.
@@ -125,23 +121,6 @@ agents.deploy(
         "MODEL_SERVING_ENDPOINT_NAME": endpoint_name,
         "MLFLOW_EXPERIMENT_ID": experiment.experiment_id,
         "ENV": env,
-        "LAKEBASE_SP_CLIENT_ID": "{{secrets/dev_SPN/client_id}}",
-        "LAKEBASE_SP_CLIENT_SECRET": "{{secrets/dev_SPN/client_secret}}",
-        "LAKEBASE_SP_HOST": WorkspaceClient().config.host,
-        # Force WorkspaceClient() inside the agent (serving.py
-        # _build_tool_context) to authenticate as Pralay's PAT so
-        # ws.genie / ws.statement_execution run with full SELECT on
-        # mlops_dev.pralaygh.dim_*. The endpoint's auto-managed SPN
-        # only has CAN_RUN on the Genie space — not SELECT on the dim
-        # tables — so generated SQL fails as the SPN
-        # (MessageStatus.FAILED). True OBO via ModelServingUserCredentials
-        # would need (a) workspace admin enables the OBO Authorization
-        # preview and (b) UserAuthPolicy declared at log_model time;
-        # neither is in place as of 2026-05.
-        # DATABRICKS_AUTH_TYPE=pat forces the SDK to ignore the auto-
-        # injected DATABRICKS_CLIENT_ID/SECRET (the SPN) and use the PAT.
-        "DATABRICKS_TOKEN": "{{secrets/pralaygh-personal/pralay_pat}}",
-        "DATABRICKS_AUTH_TYPE": "pat",
     },
 )
 

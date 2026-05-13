@@ -304,24 +304,51 @@ def _run_genie(ctx: ToolContext, question: str) -> dict:
         or []
     )
     sql = ""
+    query_attachment_id: str | None = None
     if attachments:
-        first = attachments[0]
-        # ``first`` is a ``GenieAttachment`` object (dataclass-like) in the
-        # live SDK; older SDK shapes / mocks return a dict. Handle both
-        # without assuming ``.get`` — on a text-only response ``.query`` is
-        # simply ``None`` and we fall through to ``sql=""``.
-        q = getattr(first, "query", None)
-        if q is None and isinstance(first, dict):
-            q = first.get("query")
-        if q is not None:
+        # Walk attachments to find the one carrying a SQL query. Genie
+        # often returns multiple attachments — a query result AND a
+        # clarification ("Would you prefer model year 2023 instead?") —
+        # and the legacy ``get_message_query_result`` is ambiguous about
+        # which attachment's rows it returns when both are present. We
+        # capture the query attachment's id and call the explicit
+        # attachment-scoped method below.
+        for att in attachments:
+            q = getattr(att, "query", None)
+            if q is None and isinstance(att, dict):
+                q = att.get("query")
+            if q is None:
+                continue
+            query_attachment_id = (
+                getattr(att, "attachment_id", None)
+                or (att.get("attachment_id") if isinstance(att, dict) else None)
+            )
             inner = getattr(q, "query", None)
             if inner is None and isinstance(q, dict):
                 inner = q.get("query")
             sql = inner or ""
+            break
 
-    res = client.get_message_query_result(
-        space_id=ctx.cfg.genie_space_id, conversation_id=conv_id, message_id=msg_id
-    )
+    # Prefer the attachment-scoped query result method (added in newer
+    # Databricks SDK) so the right attachment's rows are returned even
+    # when the message has multiple attachments. Fall back to the legacy
+    # method only if no attachment_id was found or the SDK doesn't expose
+    # the newer method.
+    if query_attachment_id and hasattr(
+        client, "get_message_attachment_query_result"
+    ):
+        res = client.get_message_attachment_query_result(
+            space_id=ctx.cfg.genie_space_id,
+            conversation_id=conv_id,
+            message_id=msg_id,
+            attachment_id=query_attachment_id,
+        )
+    else:
+        res = client.get_message_query_result(
+            space_id=ctx.cfg.genie_space_id,
+            conversation_id=conv_id,
+            message_id=msg_id,
+        )
     rows = _normalise_statement_result(res)
     return {"sql": sql, "rows": rows, "row_count": len(rows)}
 

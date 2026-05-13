@@ -30,6 +30,21 @@
 # MAGIC   interactive user auth is used automatically.
 
 # COMMAND ----------
+# MAGIC %md
+# MAGIC ## Pin psycopg to a Serverless-compatible wheel
+# MAGIC `psycopg[binary]==3.3.2` (pyproject default) ships a libpq wheel
+# MAGIC whose ABI is incompatible with the Free Edition Serverless runtime
+# MAGIC and crashes the kernel with SIGABRT on import. Pinning to 3.1.18
+# MAGIC uses an older binary wheel that is widely deployed and known stable
+# MAGIC on Databricks Serverless.
+
+# COMMAND ----------
+# MAGIC %pip install "psycopg[binary]==3.1.18" --quiet
+
+# COMMAND ----------
+dbutils.library.restartPython()
+
+# COMMAND ----------
 import os
 
 import psycopg

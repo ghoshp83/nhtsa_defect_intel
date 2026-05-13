@@ -20,9 +20,13 @@ dependencies = [
     "mlflow==3.8.1",
     "nest-asyncio==1.6.0",
     "databricks-agents==1.8.2",
-    "psycopg==3.3.2",
-    "psycopg-pool==3.3.0",
-    "psycopg[binary]==3.3.2",
+    # Pinned to 3.1.x because psycopg[binary]==3.3.x ships a libpq wheel
+    # whose ABI is incompatible with Databricks Free Edition Serverless
+    # (SIGABRT 134 on import). 3.1.18 is the latest 3.1.x and works
+    # cleanly. psycopg-pool 3.1.9 is the matching pool release.
+    "psycopg==3.1.18",
+    "psycopg-pool==3.1.9",
+    "psycopg[binary]==3.1.18",
     "httpx==0.28.1",
     "tenacity==9.0.0"
 ]

@@ -114,9 +114,11 @@ agent_pip_requirements = [
     "mlflow==3.8.1",
     "nest-asyncio==1.6.0",
     "databricks-agents==1.8.2",
-    "psycopg==3.3.2",
-    "psycopg-pool==3.3.0",
-    "psycopg[binary]==3.3.2",
+    # See pyproject.toml — pinned to 3.1.x for libpq ABI compatibility
+    # with Databricks Serverless / Model Serving runtimes.
+    "psycopg==3.1.18",
+    "psycopg-pool==3.1.9",
+    "psycopg[binary]==3.1.18",
     "httpx==0.28.1",
     "tenacity==9.0.0",
 ]

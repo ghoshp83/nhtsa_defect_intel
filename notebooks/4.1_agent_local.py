@@ -22,6 +22,22 @@
 # MAGIC That's `serving.py` + a separate deployment notebook in Phase 6.
 
 # COMMAND ----------
+# MAGIC %md
+# MAGIC ## Pin psycopg to a Serverless-compatible wheel
+# MAGIC `psycopg[binary]==3.3.2` (pyproject default at one point) ships a
+# MAGIC libpq wheel whose ABI is incompatible with the Free Edition
+# MAGIC Serverless runtime and crashes the kernel with SIGABRT on import.
+# MAGIC 3.1.18 is the latest 3.1.x with a wheel known stable on Databricks
+# MAGIC Serverless. Only matters when `use_lakebase=true` triggers the
+# MAGIC PostgresSessionStore import path; harmless otherwise.
+
+# COMMAND ----------
+# MAGIC %pip install "psycopg[binary]==3.1.18" --quiet
+
+# COMMAND ----------
+dbutils.library.restartPython()
+
+# COMMAND ----------
 import json
 import os
 
