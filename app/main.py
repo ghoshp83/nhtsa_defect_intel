@@ -312,11 +312,20 @@ try:
         )
         or 0
     )
+    # Workaround for the known fan-out: gold_recalls_fact is at
+    # (campaign × vehicle) grain and units_affected is replicated on
+    # every row of a campaign, so a naive SUM multi-counts. Deduplicate
+    # by (campaign_number, units_affected) before summing. Phase 2 debt
+    # — replace with the campaign-grain bridge table when built.
     units = float(
         _sql_scalar(
-            f"SELECT COALESCE(SUM(units_affected), 0) "
-            f"FROM {CATALOG_SCHEMA}.gold_recalls_fact "
-            f"WHERE event_date >= DATE_SUB(CURRENT_DATE(), 365)"
+            f"""
+            SELECT COALESCE(SUM(units_affected), 0) FROM (
+              SELECT DISTINCT campaign_number, units_affected
+              FROM {CATALOG_SCHEMA}.gold_recalls_fact
+              WHERE event_date >= DATE_SUB(CURRENT_DATE(), 365)
+            )
+            """
         )
         or 0
     )
@@ -328,9 +337,12 @@ try:
         )
         or 0
     )
+    # Same fan-out pattern as recalls: gold_investigations_fact is at
+    # (investigation × vehicle) grain. Count distinct action numbers.
+    # Phase 2 debt — collapse to action-grain bridge table.
     investigations = int(
         _sql_scalar(
-            f"SELECT COUNT(*) "
+            f"SELECT COUNT(DISTINCT nhtsa_action_number) "
             f"FROM {CATALOG_SCHEMA}.gold_investigations_fact "
             f"WHERE close_date IS NULL OR UPPER(status) = 'OPEN'"
         )
@@ -480,8 +492,12 @@ st.divider()
 st.subheader("Active ODI investigations")
 try:
     df = _sql_df(
+        # SELECT DISTINCT collapses the (investigation × vehicle)
+        # fan-out so each action_number shows once. Phase 2 debt — real
+        # fix is the action-grain bridge table.
         f"""
-        SELECT i.nhtsa_action_number AS action_number,
+        SELECT DISTINCT
+               i.nhtsa_action_number AS action_number,
                i.investigation_type AS type,
                i.status,
                i.days_open,
@@ -494,7 +510,7 @@ try:
         LEFT JOIN {CATALOG_SCHEMA}.dim_component c
           ON i.component_id = c.component_id
         WHERE i.close_date IS NULL OR UPPER(i.status) = 'OPEN'
-        ORDER BY i.event_date DESC
+        ORDER BY opened DESC
         LIMIT 50
         """
     )
