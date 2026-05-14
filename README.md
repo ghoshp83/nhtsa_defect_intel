@@ -1,17 +1,71 @@
-# NHTSA Defect Intelligence Agent
+# 🚗 NHTSA Defect Intelligence
 
-End-to-end LLMOps project on Databricks. The agent answers analytical
-questions about U.S. vehicle safety using open data published by the
-**National Highway Traffic Safety Administration (NHTSA)** — recalls,
-consumer complaints, agency investigations, Standing General Order
-(SGO) AV crash reports, and Technical Service Bulletins (TSBs).
+> **A natural-language safety analyst for the U.S. vehicle fleet — built end-to-end on Databricks.**
+> Surface emerging defects across five NHTSA data streams (recalls, complaints, ODI investigations, TSBs, SGO AV crashes) through one chat interface, with every claim cited back to a campaign number, ODI ID, or TSB.
 
-It joins five independent NHTSA data streams behind one
-natural-language interface, blending structured aggregates (Genie
-text-to-SQL over a curated star schema) with qualitative narrative
-retrieval (Vector Search over complaint, TSB, and investigation
-chunks), plus deterministic UC function lookups for cited
-identifiers.
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Databricks](https://img.shields.io/badge/Databricks-Apps%20%2B%20Mosaic%20AI-FF3621?logo=databricks&logoColor=white)](https://www.databricks.com/product/databricks-apps)
+[![MLflow](https://img.shields.io/badge/MLflow-3.8-0194E2?logo=mlflow&logoColor=white)](https://mlflow.org/)
+[![uv](https://img.shields.io/badge/built%20with-uv-DE5FE9)](https://github.com/astral-sh/uv)
+[![Tests](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white)](#testing)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+![NHTSA Defect Intel — dashboard hero](docs/images/01_dashboard_hero.png)
+
+---
+
+## Why this matters
+
+A safety analyst at an OEM, a compliance lead at a fleet operator, or an automotive journalist tracking emerging defects typically faces the same problem: **five separate NHTSA portals**, each with its own search semantics, no cross-stream join, and no way to correlate a 200-row recall campaign against the 8,000 free-text complaints that may have foreshadowed it.
+
+Traditional BI dashboards solve half of it (structured aggregates), and a generic RAG bot solves the other half badly (narrative retrieval without IDs). This project unifies them:
+
+| Persona | What they typically ask | Where the agent routes |
+|---|---|---|
+| **OEM safety engineer** | "How many recall campaigns did Ford issue in 2024, and what components dominate?" | Genie SQL over `gold_recalls_fact` |
+| **Compliance / risk officer** | "Status of investigation EA22-002 — scope and timeline?" | `fetch_investigation` |
+| **Quality-trend analyst** | "What are drivers reporting about phantom braking in 2024 Teslas?" | Vector Search over complaint narratives, filtered |
+| **Service-network lead** | "Pull TSB 10160095 in full." | `fetch_tsb` |
+| **Cross-stream defect researcher** | "Top 3 OEM groups by fire-related complaints this year, with example narratives." | Genie + Vector Search composed in one turn |
+
+Every answer cites source IDs inline — campaign numbers, ODI IDs, investigation numbers, TSB numbers — so the analyst can drill back into NHTSA's authoritative source.
+
+---
+
+## Live demo
+
+The agent ships as a **Databricks App** (Streamlit dashboard + chat) backed by a Mosaic AI Model Serving endpoint:
+
+| Surface | What you see |
+|---|---|
+| KPI strip + bar charts + recall-volume trend | Live aggregates over the last 12 / 24 months, populated by the warehouse on every page load |
+| **"Ask the analyst"** chat | Multi-turn agent with Lakebase-backed session memory, tool routing across four tools, and accumulated filters |
+| **"🔎 How I got this"** expander | Every assistant turn ships its full reasoning trace — which tool was called, with what arguments, the result preview, per-step latency, and any session filters that were inferred |
+
+![Chat with traceability expander](docs/images/02_chat_traceability.png)
+
+![MLflow trace + Phase 6 monitoring dashboard](docs/images/03_mlflow_and_dashboard.png)
+
+> The "How I got this" expander is the key portfolio detail — it surfaces the agent's *reasoning*, not just its *answer*. The Genie-generated SQL, the Vector Search filters the LLM inferred, the per-step latency — all visible to the user, so the chat is **inspectable, not magic**.
+
+---
+
+## What this project does, in one diagram
+
+The unified NL interface routes across structured + qualitative retrieval:
+
+```
+User Q → NhtsaAgent (Llama 4 Maverick + 4 tools)
+              ├─ genie_recalls          (NL → SQL over gold star schema)
+              ├─ vector_search_narrative (RAG over complaint / TSB / investigation chunks)
+              ├─ fetch_tsb              (UC SQL by NHTSA item number)
+              └─ fetch_investigation    (UC SQL by NHTSA action number)
+                                  │
+                                  ▼
+                          Cited answer + tool_trace
+```
+
+Multi-turn refinement ("only Hyundai", "limit to 2024", "show me brakes only") is carried through Lakebase-backed session memory, including an `accumulated_filters` bag the agent merges into each subsequent request.
 
 ---
 
@@ -30,6 +84,9 @@ identifiers.
 11. [Deployment](#deployment)
 12. [Workflow catalogue](#workflow-catalogue)
 13. [Testing](#testing)
+14. [Engineering lessons](#engineering-lessons)
+15. [Roadmap](#roadmap)
+16. [About](#about)
 
 ---
 
@@ -559,7 +616,8 @@ databricks bundle run update_traces_aggregated --target dev
 
 ---
 
-## Workflow catalogue
+<details>
+<summary><strong>Workflow catalogue</strong> — every Asset Bundle job and its schedule (click to expand)</summary>
 
 Every job is declared in `resources/*.yml` and bundled by
 `databricks.yml`. UTC schedules cascade through the day so each
@@ -582,6 +640,8 @@ stage runs against a freshly-built upstream:
 | `register_deploy_agent` | `log_register_agent.py` + `deploy_agent.py` | manual / on PR merge |
 | `update_traces_aggregated` | `update_traces_aggregated.py` | scheduled (per bundle config) |
 
+</details>
+
 ---
 
 ## Testing
@@ -590,7 +650,13 @@ stage runs against a freshly-built upstream:
 uv run pytest
 ```
 
-Suites in `tests/`:
+The agent is built with injected collaborators (`LLMClient`,
+`ToolContext`, `SessionStore`) so the suite never imports the
+Databricks SDK at test-collection time — `pytest` runs on any
+developer machine in seconds, no Spark required.
+
+<details>
+<summary><strong>Test-suite breakdown</strong> — what each file covers (click to expand)</summary>
 
 | File | Coverage |
 |---|---|
@@ -608,6 +674,105 @@ Suites in `tests/`:
 | `test_tracing.py` | MLflow span emission |
 | `test_phase6.py` | Drift-guard against dashboard SQL + JSON column / span names |
 
-The agent is built with injected collaborators (`LLMClient`,
-`ToolContext`, `SessionStore`) so the suite never imports the
-Databricks SDK at test-collection time.
+</details>
+
+---
+
+## Engineering lessons
+
+A few non-obvious findings worth keeping. Each one cost real debug time; they
+generalise beyond this project.
+
+1. **LLM tool-calls are *probabilistically* well-formed, not reliably so.** Llama-class
+   endpoints occasionally emit tool calls as Python-style text content
+   (`genie_recalls(question="...")`) instead of populating the structured
+   `tool_calls` field. Without recovery, the leaked syntax is what the user sees.
+   `agent._recover_textual_tool_call` parses such expressions (anchored
+   end-to-end so paragraph-level parens never misclassify) and re-injects them as
+   a structured call when the function name matches the registered tool set.
+   *Lesson: never trust the structured-output contract; build a recovery path for
+   the most likely violations.*
+
+2. **`additionalProperties: false` is a suggestion to the LLM, not a constraint.**
+   Llama 4 Maverick routinely passes invented filter keys
+   (`bulletin_year`, `nhtsa_item_number`, `odid`) to `vector_search_narrative`,
+   even though the function schema explicitly forbids them. The dispatcher
+   keeps a `_VS_FILTER_KEYS = frozenset(_vs_filter_schema()["properties"])`
+   whitelist and silently drops unknown keys with a `logger.warning`.
+   *Lesson: validate LLM-shaped arguments against your real schema at the
+   tool-dispatcher boundary, not just in the prompt.*
+
+3. **The Databricks Genie API has a multi-attachment quirk.** When a Genie
+   message produces SQL *and* a clarification suggestion ("Would you prefer
+   to see recall campaigns based on model year 2023?"), the legacy
+   `get_message_query_result(...)` is ambiguous and may return the wrong
+   attachment's payload. The same generated SQL that returned 15 rows in the
+   Genie UI returned `rows: []` through the SDK. Fix: walk attachments to find
+   the SQL-bearing one, capture its `attachment_id`, and call
+   `get_message_attachment_query_result(..., attachment_id=...)`.
+   *Lesson: when an SDK has both scoped and unscoped accessors, the unscoped
+   one is "convenient" until it's silently wrong.*
+
+4. **Grain awareness is the first thing a fact-table consumer learns.**
+   `gold_recalls_fact` is at (campaign × vehicle) grain — a single recall
+   campaign is replicated across every vehicle it covers, and `units_affected`
+   is replicated on every row. A naive `SUM(units_affected)` overcounts by 1-2
+   orders of magnitude (we measured 12,369M vs the actual ~32M). The clean
+   long-term fix is a campaign-grain bridge table; the App ships a
+   `SELECT DISTINCT campaign_number, units_affected` band-aid so analysts see
+   plausible numbers until the bridge lands.
+   *Lesson: name your grain in the fact table and document it; the moment
+   downstream code starts SUM-ing replicated values, debugging gets hard.*
+
+5. **Trace tables don't auto-materialise — Delta sync is opt-in.** Mosaic AI
+   tracing always writes to the MLflow backend (visible in the Experiment UI),
+   but the UC Delta table required for SQL-based dashboards is created only when
+   you enable Delta sync. Doing this opt-in spawns a system job
+   (`[<experiment_id>] Trace Archive Job`) that syncs traces periodically; the
+   destination table name is whatever you type into the dialog and is *not*
+   auto-derived from the experiment ID.
+   *Lesson: never assume "auto-created" for ops-critical tables — verify with
+   `SHOW TABLES` before wiring your aggregator's default to a presumed name.*
+
+---
+
+## Roadmap
+
+Phase 1 (this branch) covers the end-to-end pipeline + agent + App. Known
+trade-offs from Phase 1 — explicitly documented so reviewers know what's a
+shortcut vs. a design choice:
+
+| # | Item | Why deferred |
+|---|---|---|
+| 1 | **Campaign-grain bridge** for recall facts | Lets us replace the App's `SELECT DISTINCT campaign_number, units_affected` band-aid with direct counts. |
+| 2 | **Action-grain bridge** for investigations | Same pattern as #1 — collapses (investigation × vehicle) fan-out in the Active Investigations table. |
+| 3 | **Tier-2 citation-format alignment** | The grounded-citation eval scored 0% — likely a regex/format mismatch between the agent's "ODI ID 12345" and the checker's expected format, not a fundamental failure. |
+| 4 | **Complete `silver_investigation_parsed` backfill** | 2,600 / 20,610 PDFs parsed via `ai_parse_document`; the remainder will unlock per-investigation `fetch_investigation` for older actions. |
+| 5 | **TSB + SGO gold rollups** | Surfaced in the App's *"Coming soon"* panel — silver layer is ingested, gold dimensional rollups still to design. |
+| 6 | **Latency stamping on every tool path** | `tool_trace.latency_ms` shows `—` for a few tools because not all entry points in `mcp.py` stamp `_latency_ms` onto the result dict; the App's expander already renders the field. |
+| 7 | **Scorer regex tightening** | `cite_id_present` / `mentions_oem` are reading 0% on real traces despite obvious citations — likely a regex bug in the trace-side scorer, not in the answer. |
+
+---
+
+## About
+
+Built by **Pralay Ghosh** — Data & MLOps engineer with a focus on
+production-grade LLM applications across telecom, fintech, and automotive.
+
+This project is a public portfolio build of an end-to-end LLMOps system on
+Databricks: data ingestion, medallion pipeline, Vector Search, Genie, an
+MLflow-registered agent, eval gates, traces, dashboards, and a Streamlit
+App — all in one repo. The intent is to show what "production-shaped" looks
+like for an internal LLM tool, not just the agent code in isolation.
+
+- ✉️  [pralay.ghosh@gmail.com](mailto:pralay.ghosh@gmail.com)
+- 🌐 GitHub: [ghoshp83](https://github.com/ghoshp83)
+
+If you want to discuss the architecture, the eval design, or the tracing
+approach — please reach out.
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE).
