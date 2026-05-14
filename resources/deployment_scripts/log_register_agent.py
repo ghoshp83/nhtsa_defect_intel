@@ -48,14 +48,16 @@ model_name = f"{cfg.catalog}.{cfg.db_schema}.nhtsa_agent_pg"
 spark = SparkSession.builder.getOrCreate()
 
 gold_versions: dict[str, str] = {}
-# `gold_tsb_meta` and `gold_sgo_av_crashes` transforms were never built
-# (silver tables exist, gold transforms TBD). Not on the demo critical
-# path — the agent answers TSB/SGO questions via the vector index +
-# Genie space.
+# Record Delta versions for every gold table the agent reads from at
+# runtime — Genie reaches the four fact tables and the dims; vector
+# search reaches `gold_narrative_chunks`. Stamping versions onto the
+# registered model gives us reproducible lineage per release.
 for tbl in (
     "gold_recalls_fact",
     "gold_complaints_fact",
-    "gold_investig_fact",
+    "gold_investigations_fact",
+    "gold_tsbs_fact",
+    "gold_sgo_av_crashes",
     "gold_narrative_chunks",
 ):
     try:

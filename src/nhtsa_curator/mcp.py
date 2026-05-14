@@ -137,6 +137,12 @@ def _vs_filter_schema() -> dict:
     }
 
 
+# Single source of truth for valid filter keys — derived from the schema
+# we advertise to the LLM. Used by _run_vector_search to drop schema-
+# violating keys before the index rejects them with a 400.
+_VS_FILTER_KEYS: frozenset[str] = frozenset(_vs_filter_schema()["properties"])
+
+
 def tool_specs(cfg: ProjectConfig) -> list[dict]:
     """Return the 4 OpenAI-function tool specs for this agent.
 
@@ -393,6 +399,20 @@ def _run_vector_search(
             similarity_metric=vs_cfg.similarity_metric,
             num_results=num_results,
         )
+
+    # Llama-4-Maverick occasionally violates `additionalProperties: false`
+    # on the filter schema and passes keys (e.g. `nhtsa_item_number`,
+    # `bulletin_year`, `odid`) that don't exist on the index. The Vector
+    # Search API rejects these with a 400 and the whole tool call fails.
+    # Drop unknown keys with a warning so the query still runs against
+    # the valid subset — better degraded retrieval than a hard error.
+    if filters:
+        unknown = set(filters) - _VS_FILTER_KEYS
+        if unknown:
+            logger.warning(
+                "Dropping unsupported VS filter keys: {}", sorted(unknown)
+            )
+            filters = {k: v for k, v in filters.items() if k in _VS_FILTER_KEYS}
 
     hits = similarity_search(
         client=ctx.vs_client,

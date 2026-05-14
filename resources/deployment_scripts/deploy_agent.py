@@ -94,14 +94,21 @@ _delete_if_broken(endpoint_name)
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## databricks.agents.deploy
-# MAGIC First deploy on Free Edition workspace `dbc-5604c867-d90d` — no
-# MAGIC explicit Lakebase SP env vars and no PAT injection. The endpoint's
-# MAGIC auto-managed credentials are exposed to the container as
-# MAGIC `DATABRICKS_CLIENT_ID`/`_SECRET`, so `WorkspaceClient()` inside
-# MAGIC `serving.py` will auth as that SPN. If Genie SQL or Lakebase access
-# MAGIC fails at runtime with permission errors, the fix is to (a) create the
-# MAGIC required secret scopes here and (b) re-add the env vars to force PAT
-# MAGIC auth / supply Lakebase SPN creds — same pattern as the prior workspace.
+# MAGIC The usage policy rate-limits + content-moderates the endpoint.
+# MAGIC
+# MAGIC `DATABRICKS_TOKEN` + `DATABRICKS_AUTH_TYPE=pat` route every
+# MAGIC `WorkspaceClient()` inside the container to authenticate as
+# MAGIC Pralay's PAT instead of the endpoint's auto-managed SPN. The
+# MAGIC first deploy on this workspace (without PAT) failed at runtime
+# MAGIC with `psycopg.OperationalError: password authentication failed
+# MAGIC for user '<spn-uuid>'` — the auto-managed SPN had no Postgres
+# MAGIC role on the Lakebase `nhtsa-agent-lakebase-pg` project. PAT auth
+# MAGIC sidesteps this because Pralay owns the Lakebase project (created
+# MAGIC by 4.2). The same PAT also gives `ws.genie` / `ws.statement_execution`
+# MAGIC the SELECT grants on `mlops_dev.pralaygh.*` that the SPN lacks.
+# MAGIC True OBO via `ModelServingUserCredentials` would need (a) workspace
+# MAGIC admin enables the OBO preview and (b) `UserAuthPolicy` declared at
+# MAGIC log_model time; neither is in place on Free Edition as of 2026-05.
 
 # COMMAND ----------
 # prd keeps one warm replica; dev/acc scale to zero between demos.
@@ -121,6 +128,17 @@ agents.deploy(
         "MODEL_SERVING_ENDPOINT_NAME": endpoint_name,
         "MLFLOW_EXPERIMENT_ID": experiment.experiment_id,
         "ENV": env,
+        # See markdown above — PAT auth fixes both Lakebase (Postgres
+        # role) and Genie/SQL (UC SELECT) auth deltas vs the endpoint's
+        # auto-managed SPN. DATABRICKS_AUTH_TYPE=pat forces the SDK to
+        # ignore the auto-injected DATABRICKS_CLIENT_ID/SECRET.
+        # DATABRICKS_HOST is required because explicit PAT mode disables
+        # the SDK's auto-discovery of the Model-Serving-injected host;
+        # without it the SDK errors with "default auth: cannot configure
+        # default credentials" at agent module load.
+        "DATABRICKS_HOST": WorkspaceClient().config.host,
+        "DATABRICKS_TOKEN": "{{secrets/pralaygh-personal/pralay_pat}}",
+        "DATABRICKS_AUTH_TYPE": "pat",
     },
 )
 
