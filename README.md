@@ -10,7 +10,7 @@
 [![Tests](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white)](#testing)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-![NHTSA Defect Intel — dashboard hero](docs/images/01_dashboard_hero.png)
+![NHTSA Defect Intel — dashboard hero](assets/01_dashboard_hero.png)
 
 ---
 
@@ -42,9 +42,9 @@ The agent ships as a **Databricks App** (Streamlit dashboard + chat) backed by a
 | **"Ask the analyst"** chat | Multi-turn agent with Lakebase-backed session memory, tool routing across four tools, and accumulated filters |
 | **"🔎 How I got this"** expander | Every assistant turn ships its full reasoning trace — which tool was called, with what arguments, the result preview, per-step latency, and any session filters that were inferred |
 
-![Chat with traceability expander](docs/images/02_chat_traceability.png)
+![Chat with traceability expander](assets/02_chat_traceability.png)
 
-![MLflow trace + Phase 6 monitoring dashboard](docs/images/03_mlflow_and_dashboard.png)
+![MLflow trace + Phase 6 monitoring dashboard](assets/03_mlflow_and_dashboard.png)
 
 > The "How I got this" expander is the key portfolio detail — it surfaces the agent's *reasoning*, not just its *answer*. The Genie-generated SQL, the Vector Search filters the LLM inferred, the per-step latency — all visible to the user, so the chat is **inspectable, not magic**.
 
