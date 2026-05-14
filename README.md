@@ -756,10 +756,10 @@ shortcut vs. a design choice:
 
 ## About
 
-Built by **Pralay Ghosh** — Data & MLOps engineer with a focus on
+Built by **Pralay Ghosh** — Data & LLMOps engineer with a focus on
 production-grade LLM applications across telecom, fintech, and automotive.
 
-This project is a public portfolio build of an end-to-end LLMOps system on
+This project is an end-to-end LLMOps system on
 Databricks: data ingestion, medallion pipeline, Vector Search, Genie, an
 MLflow-registered agent, eval gates, traces, dashboards, and a Streamlit
 App — all in one repo. The intent is to show what "production-shaped" looks
