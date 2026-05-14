@@ -18,7 +18,7 @@ env:
   # complaint themes, recall trend, investigations table). Hardcoded
   # to dev for Phase 1; lift to bundle vars in Phase 2.
   - name: DATABRICKS_WAREHOUSE_ID
-    value: 96e26e80fcd91931
+    value: f871f96e97724dca
   - name: NHTSA_CATALOG_SCHEMA
     value: mlops_dev.pralaygh
   # Force the SDK's auth chain to PAT only. Apps inject

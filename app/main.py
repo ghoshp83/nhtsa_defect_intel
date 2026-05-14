@@ -39,7 +39,7 @@ from databricks.sdk import WorkspaceClient
 from openai import OpenAI
 
 ENDPOINT_NAME = os.environ.get("AGENT_ENDPOINT_NAME", "nhtsa-agent-endpoint-dev-pg")
-WAREHOUSE_ID = os.environ.get("DATABRICKS_WAREHOUSE_ID", "96e26e80fcd91931")
+WAREHOUSE_ID = os.environ.get("DATABRICKS_WAREHOUSE_ID", "f871f96e97724dca")
 CATALOG_SCHEMA = os.environ.get("NHTSA_CATALOG_SCHEMA", "mlops_dev.pralaygh")
 
 
@@ -57,6 +57,42 @@ def _build_openai_client() -> OpenAI:
         base_url=f"{ws.config.host.rstrip('/')}/serving-endpoints",
         api_key=bearer,
     )
+
+
+def _response_dump(response: object) -> dict:
+    """Best-effort dict view of a Responses API result (for trace extraction)."""
+    dump = getattr(response, "model_dump", None)
+    if callable(dump):
+        try:
+            return dump() or {}
+        except Exception:
+            pass
+    if isinstance(response, dict):
+        return response
+    return {}
+
+
+def _extract_custom_outputs(response: object) -> dict:
+    """Walk the response dump for the message item's ``custom_outputs``.
+
+    The agent emits trace metadata (tool_trace, n_llm_calls, etc.) on the
+    message-item dict — see ``src/nhtsa_curator/serving.py``. The OpenAI
+    SDK's pydantic models pass unknown fields through via ``model_extra``,
+    so ``model_dump()`` preserves them.
+    """
+    raw = _response_dump(response)
+    for item in raw.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "message":
+            continue
+        co = item.get("custom_outputs")
+        if isinstance(co, dict):
+            return co
+    # Fall back to top-level custom_outputs if the SDK collapsed extras
+    # on individual items (older openai-python releases).
+    top = raw.get("custom_outputs")
+    return top if isinstance(top, dict) else {}
 
 
 def _extract_answer(response: object) -> tuple[str, dict | None]:
@@ -108,6 +144,50 @@ def _extract_answer(response: object) -> tuple[str, dict | None]:
     return "(no response)", raw
 
 
+def _render_trace(custom_outputs: dict) -> None:
+    """Render an inline expander showing the agent's reasoning trace.
+
+    Each tool_trace entry comes from ``NhtsaAgent.run_turn`` and carries
+    ``step``, ``name``, ``args``, ``result_preview``, ``latency_ms``,
+    ``error``. We render them as a markdown list so users see how the
+    agent decomposed the question into Genie SQL / vector search /
+    fact lookups.
+    """
+    trace = custom_outputs.get("tool_trace") or []
+    n_llm = custom_outputs.get("n_llm_calls")
+    stopped = custom_outputs.get("stopped_reason")
+    filters = custom_outputs.get("accumulated_filters") or {}
+
+    summary = []
+    if isinstance(n_llm, int):
+        summary.append(f"{n_llm} LLM call{'s' if n_llm != 1 else ''}")
+    if trace:
+        summary.append(f"{len(trace)} tool call{'s' if len(trace) != 1 else ''}")
+    if stopped and stopped != "ok":
+        summary.append(f"stopped: `{stopped}`")
+    label = "🔎 How I got this — " + (" · ".join(summary) if summary else "trace")
+
+    with st.expander(label, expanded=False):
+        if not trace:
+            st.caption("No tools were called — the LLM answered directly.")
+        for step in trace:
+            name = step.get("name", "?")
+            latency = step.get("latency_ms")
+            latency_str = f"{latency} ms" if isinstance(latency, int) else "—"
+            err = step.get("error")
+            badge = " ⚠️" if err else ""
+            st.markdown(f"**Step {step.get('step', '?')} · `{name}` · {latency_str}{badge}**")
+            args = step.get("args") or {}
+            if args:
+                st.json(args, expanded=False)
+            preview = step.get("result_preview") or ""
+            if preview:
+                st.code(str(preview)[:1500], language="text")
+        if filters:
+            st.markdown("**Session filters accumulated so far:**")
+            st.json(filters, expanded=False)
+
+
 def _identity_debug() -> dict:
     """SDK identity + auth_type for the sidebar debug panel."""
     info: dict = {}
@@ -149,7 +229,10 @@ def _sql_df(sql: str) -> pd.DataFrame:
     """Execute a SQL statement against the configured warehouse.
 
     Cached for 5 minutes — the panel data is aggregate and doesn't need
-    real-time refresh on every page interaction.
+    real-time refresh on every page interaction. Raises a ``RuntimeError``
+    with the SQL state's error message if the statement failed or never
+    completed within ``wait_timeout``, so the caller's try/except surfaces
+    the real cause instead of a silent empty DataFrame.
     """
     ws = _ws()
     res = ws.statement_execution.execute_statement(
@@ -158,10 +241,31 @@ def _sql_df(sql: str) -> pd.DataFrame:
         wait_timeout="30s",
     )
     sr = getattr(res, "statement_response", None) or res
+
+    state = getattr(getattr(sr, "status", None), "state", None)
+    state_str = str(state) if state is not None else "UNKNOWN"
+    if state_str.endswith("FAILED") or state_str.endswith("CANCELED"):
+        err = getattr(getattr(sr, "status", None), "error", None)
+        msg = getattr(err, "message", None) or "no error message"
+        raise RuntimeError(f"warehouse statement {state_str}: {msg}")
+    if not state_str.endswith("SUCCEEDED"):
+        raise RuntimeError(
+            f"warehouse statement did not complete in wait_timeout (state={state_str})"
+        )
+
     manifest = getattr(sr, "manifest", None)
     cols = [c.name for c in manifest.schema.columns] if manifest else []
     data = getattr(getattr(sr, "result", None), "data_array", None) or []
     return pd.DataFrame(data, columns=cols)
+
+
+def _sql_scalar(sql: str, default: object = 0) -> object:
+    """Return the first cell of a single-row, single-column query."""
+    df = _sql_df(sql)
+    if df.empty or df.shape[1] == 0:
+        return default
+    val = df.iloc[0, 0]
+    return default if val is None else val
 
 
 # ---------------------------------------------------------------------------
@@ -194,37 +298,52 @@ st.divider()
 
 st.subheader("At a glance — last 12 months")
 
+# Four small scalar queries instead of one nested-subquery SELECT —
+# Databricks SQL result manifests for a no-FROM scalar-subquery query
+# sometimes come back with an empty column list, leaving _sql_df with a
+# silently-empty DataFrame. Per-metric queries also let a single failed
+# table not blank-out the whole strip.
 try:
-    kpis = _sql_df(
-        f"""
-        SELECT
-          (SELECT COUNT(DISTINCT campaign_number)
-             FROM {CATALOG_SCHEMA}.gold_recalls_fact
-             WHERE event_date >= DATE_SUB(CURRENT_DATE(), 365)) AS recalls,
-          (SELECT COALESCE(SUM(units_affected), 0)
-             FROM {CATALOG_SCHEMA}.gold_recalls_fact
-             WHERE event_date >= DATE_SUB(CURRENT_DATE(), 365)) AS units,
-          (SELECT COUNT(*)
-             FROM {CATALOG_SCHEMA}.gold_complaints_fact
-             WHERE event_date >= DATE_SUB(CURRENT_DATE(), 90)) AS complaints,
-          (SELECT COUNT(*)
-             FROM {CATALOG_SCHEMA}.gold_investigations_fact
-             WHERE close_date IS NULL OR UPPER(status) = 'OPEN') AS investigations
-        """
-    )
-    if not kpis.empty:
-        row = kpis.iloc[0]
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Recall campaigns", f"{int(row['recalls'] or 0):,}")
-        units = float(row["units"] or 0)
-        units_label = (
-            f"{units / 1_000_000:.1f}M" if units >= 1_000_000 else f"{int(units):,}"
+    recalls = int(
+        _sql_scalar(
+            f"SELECT COUNT(DISTINCT campaign_number) "
+            f"FROM {CATALOG_SCHEMA}.gold_recalls_fact "
+            f"WHERE event_date >= DATE_SUB(CURRENT_DATE(), 365)"
         )
-        c2.metric("Vehicles affected", units_label)
-        c3.metric("Complaints (90d)", f"{int(row['complaints'] or 0):,}")
-        c4.metric("Open investigations", f"{int(row['investigations'] or 0):,}")
-    else:
-        st.info("No KPI data returned — check warehouse access.")
+        or 0
+    )
+    units = float(
+        _sql_scalar(
+            f"SELECT COALESCE(SUM(units_affected), 0) "
+            f"FROM {CATALOG_SCHEMA}.gold_recalls_fact "
+            f"WHERE event_date >= DATE_SUB(CURRENT_DATE(), 365)"
+        )
+        or 0
+    )
+    complaints = int(
+        _sql_scalar(
+            f"SELECT COUNT(*) "
+            f"FROM {CATALOG_SCHEMA}.gold_complaints_fact "
+            f"WHERE event_date >= DATE_SUB(CURRENT_DATE(), 90)"
+        )
+        or 0
+    )
+    investigations = int(
+        _sql_scalar(
+            f"SELECT COUNT(*) "
+            f"FROM {CATALOG_SCHEMA}.gold_investigations_fact "
+            f"WHERE close_date IS NULL OR UPPER(status) = 'OPEN'"
+        )
+        or 0
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Recall campaigns", f"{recalls:,}")
+    units_label = (
+        f"{units / 1_000_000:.1f}M" if units >= 1_000_000 else f"{int(units):,}"
+    )
+    c2.metric("Vehicles affected", units_label)
+    c3.metric("Complaints (90d)", f"{complaints:,}")
+    c4.metric("Open investigations", f"{investigations:,}")
 except Exception as exc:
     st.warning(f"KPI query failed: `{exc}`")
 
@@ -432,6 +551,8 @@ st.caption(f"Session: `{st.session_state.session_id}`")
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+        if msg.get("custom_outputs"):
+            _render_trace(msg["custom_outputs"])
         if msg.get("request_id"):
             st.caption(f"request_id: `{msg['request_id']}`")
 
@@ -445,6 +566,7 @@ if prompt:
         placeholder = st.empty()
         placeholder.markdown("_Thinking…_")
         raw_dump: dict | None = None
+        custom_outputs: dict = {}
         request_id = str(uuid.uuid4())
         try:
             client = _build_openai_client()
@@ -459,16 +581,24 @@ if prompt:
                 },
             )
             answer, raw_dump = _extract_answer(response)
+            custom_outputs = _extract_custom_outputs(response)
         except Exception as exc:
             answer = f"**Error calling `{ENDPOINT_NAME}`:** `{exc}`"
 
         placeholder.markdown(answer)
+        if custom_outputs:
+            _render_trace(custom_outputs)
         st.caption(f"request_id: `{request_id}`")
         if raw_dump is not None:
             with st.expander("Raw response (debug)"):
                 st.json(raw_dump)
         st.session_state.messages.append(
-            {"role": "assistant", "content": answer, "request_id": request_id}
+            {
+                "role": "assistant",
+                "content": answer,
+                "request_id": request_id,
+                "custom_outputs": custom_outputs,
+            }
         )
 
 

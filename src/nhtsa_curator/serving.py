@@ -454,6 +454,10 @@ def _responses_message_event(result: AgentResult) -> dict:
                 "session_id": result.session_id,
                 "n_llm_calls": result.n_llm_calls,
                 "stopped_reason": result.stopped_reason,
+                # Full step-by-step tool trace so the chat UI can show
+                # "how the agent got this answer" — see app/main.py.
+                "tool_trace": result.tool_trace,
+                "accumulated_filters": result.accumulated_filters,
             },
         },
     }

@@ -52,11 +52,12 @@ spark = SparkSession.builder.getOrCreate()
 catalog = cfg.catalog
 schema = cfg.db_schema
 
-# The Mosaic AI traces table is auto-created once the agent endpoint
-# fires its first trace; name is ``trace_logs_<experiment_id>``. Make
-# the name a parameter so we don't hard-code the experiment id.
+# Delta-synced traces table; the destination is configured one-time in
+# the MLflow Experiment → Traces UI ("Sync traces to Unity Catalog") and
+# the table here must match the name chosen there. Pass via widget so
+# the same notebook can serve a renamed table in acc/prd without code.
 traces_table = get_widget(
-    "traces_table", f"{catalog}.{schema}.trace_logs_2733558024257526"
+    "traces_table", f"{catalog}.{schema}.nhtsa_traces_raw"
 )
 aggregated_view = f"{catalog}.{schema}.nhtsa_traces_aggregated_pg"
 endpoint_name = f"nhtsa-agent-endpoint-{env}-pg"
