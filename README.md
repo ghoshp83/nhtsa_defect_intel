@@ -42,11 +42,27 @@ The agent ships as a **Databricks App** (Streamlit dashboard + chat) backed by a
 | **"Ask the analyst"** chat | Multi-turn agent with Lakebase-backed session memory, tool routing across four tools, and accumulated filters |
 | **"🔎 How I got this"** expander | Every assistant turn ships its full reasoning trace — which tool was called, with what arguments, the result preview, per-step latency, and any session filters that were inferred |
 
-![Chat with traceability expander](assets/02_chat_traceability.png)
+**The agent's four tool paths — each fully traced in the "🔎 How I got this" expander:**
+
+![Genie SQL path — natural-language counts over the gold star schema](assets/02_chat_traceability1.png)
+
+> **1 · `genie_recalls` — natural language → SQL.** *"How many recall campaigns were issued for Tesla vehicles in 2023?"* → **15**. The trace shows the question handed to Genie and the exact SQL it generated against `gold_recalls_fact`.
+
+![Vector Search path — semantic retrieval over complaint narratives](assets/02_chat_traceability2.png)
+
+> **2 · `vector_search_narrative` — RAG over narratives.** *"What kinds of issues are drivers reporting about unintended acceleration?"* The trace shows the query plus the `source_dataset` / `component_group` filters the LLM inferred — and the session filters it accumulates for follow-up turns.
+
+![Deterministic TSB lookup by NHTSA item number](assets/02_chat_traceability3.png)
+
+> **3 · `fetch_tsb` — deterministic Unity Catalog lookup.** *"Give me the full details of TSB 10160095."* A precise lookup by item number — no retrieval, no hallucination surface — returning the Hyundai Sonata Hybrid bulletin.
+
+![Multi-tool routing — two fetch_investigation attempts then a Genie fallback](assets/02_chat_traceability4.png)
+
+> **4 · Multi-tool routing with fallback.** *"What's the status and scope of investigation EA22-002?"* — three tool calls in one turn: `fetch_investigation` normalises `EA22002`, then `EA22-002` (per-step latency shown), then falls back to `genie_recalls`. Even when a record isn't in the parsed corpus, the trace shows exactly what the agent tried — the failure mode is **inspectable, not silent**.
 
 ![MLflow trace + Phase 6 monitoring dashboard](assets/03_mlflow_and_dashboard.png)
 
-> The "How I got this" expander is the key portfolio detail — it surfaces the agent's *reasoning*, not just its *answer*. The Genie-generated SQL, the Vector Search filters the LLM inferred, the per-step latency — all visible to the user, so the chat is **inspectable, not magic**.
+> The "🔎 How I got this" expander is the key portfolio detail — it surfaces the agent's *reasoning*, not just its *answer*, so the chat is **inspectable, not magic**.
 
 ---
 
@@ -87,6 +103,7 @@ Multi-turn refinement ("only Hyundai", "limit to 2024", "show me brakes only") i
 14. [Engineering lessons](#engineering-lessons)
 15. [Roadmap](#roadmap)
 16. [About](#about)
+17. [License](#license)
 
 ---
 
@@ -440,10 +457,15 @@ implementations:
 The agent only ever holds a `SessionStore` — swapping the impl
 requires no agent code changes.
 
-Lakebase auth uses a dedicated service principal at serve time
+Lakebase auth is pluggable. In a production-shaped deploy the
+serving endpoint authenticates as a dedicated service principal
 (injected via `LAKEBASE_SP_CLIENT_ID` / `LAKEBASE_SP_CLIENT_SECRET`
-/ `LAKEBASE_SP_HOST` env vars) and falls back to the workspace
-user's identity for local notebook usage.
+/ `LAKEBASE_SP_HOST` env vars). When those are absent — as on the
+Free Edition instance this build runs on, where the serving SPN
+can't be granted a Postgres role — `_conn_factory` falls back to
+the workspace identity (a scoped PAT at serve time, the
+interactive user in local notebooks). The agent code path is
+identical either way.
 
 `notebooks/4.2_lakebase_setup.py` bootstraps the schema (also wired
 as the `lakebase_setup_job.yml` Asset Bundle job — manual trigger,
@@ -534,8 +556,8 @@ sections:
 
 - **`system_prompt`** — instructs the agent to use Genie for
   structured aggregates, Vector Search for qualitative evidence,
-  `fetch_tsb_document` for full bulletin text, and to **always cite
-  source IDs** inline. Includes a strict tool-call protocol forbidding
+  `fetch_tsb` / `fetch_investigation` for exact bulletin /
+  investigation text, and to **always cite source IDs** inline. Includes a strict tool-call protocol forbidding
   plain-text function-call syntax.
 - **`dev` / `acc` / `prd`** — `catalog`, `schema`, `volume`,
   `llm_endpoint`, `embedding_endpoint`, `warehouse_id`,

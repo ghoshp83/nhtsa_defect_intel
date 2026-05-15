@@ -15,8 +15,10 @@ system_prompt: |
   2. Use the Vector Search tool to retrieve relevant complaint narratives,
      TSB descriptions, and investigation document chunks for qualitative
      evidence.
-  3. Use the fetch_tsb_document tool to pull the full text of a TSB or
-     investigation document when a citation requires it.
+  3. Use the fetch_tsb tool to pull the full text of a TSB by its
+     NHTSA item number, and the fetch_investigation tool to pull an
+     investigation by its NHTSA action number, when a citation
+     requires the exact document.
   4. Compose answers that combine quantitative findings with qualitative
      evidence, and ALWAYS cite source IDs (recall campaign #, complaint
      ODI ID, investigation #, TSB #) inline.
