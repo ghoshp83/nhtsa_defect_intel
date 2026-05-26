@@ -28,9 +28,7 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-USER_AGENT = (
-    "nhtsa-defect-intel/0.0.1 (LLMOps course project; contact: pralay.ghosh@gmail.com)"
-)
+USER_AGENT = "nhtsa-defect-intel/0.0.1 (+https://github.com/ghoshp83/nhtsa_defect_intel)"
 
 # httpx exceptions we want to retry on.
 _RETRYABLE = (

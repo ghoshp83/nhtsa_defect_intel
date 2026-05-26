@@ -583,10 +583,25 @@ sections:
   `notebooks/eval/*.tsv` (the default `.py/.ipynb/.yml` filter would
   silently drop the TSV ground truth otherwise).
 
-Replace workspace-specific values in `project_config.yml` (catalog,
-schema, warehouse id, Genie space id, vector search endpoint,
-usage policy id, Lakebase project id) and the workspace `host`
-URLs in `databricks.yml` before deploying.
+### First-time setup (fork / clone)
+
+The committed config points at the workspace this was built in. The
+values below are **not secrets** — they're workspace-scoped resource
+identifiers, useless without authenticated access to that workspace —
+but you'll need to swap them for your own before the bundle will
+deploy and run against *your* Databricks workspace:
+
+| What | Where | Replace with |
+| --- | --- | --- |
+| Workspace `host` (×3 targets) | `databricks.yml` | Your workspace URL, e.g. `https://<your-workspace>.cloud.databricks.com` |
+| `warehouse_id` | `databricks.yml` (var default) + `project_config.yml` (`dev`/`acc`/`prd`) | Your SQL warehouse ID. `app/main.py` also reads `DATABRICKS_WAREHOUSE_ID` from the environment if you prefer not to hardcode it. |
+| `catalog` / `schema` | `project_config.yml` (per target) | Your Unity Catalog catalog + schema |
+| `genie_space_id` | `project_config.yml` | Your Genie space ID (acc/prd ship as `PLACEHOLDER_*`) |
+| `usage_policy_id` | `project_config.yml` | Your AI Gateway usage-policy ID (optional) |
+| `vector_search_endpoint` | `project_config.yml` | Your Vector Search endpoint name |
+| `lakebase_project_id` | `project_config.yml` | Your Lakebase project ID |
+| `experiment_name` | `project_config.yml` | An MLflow experiment path you own |
+| Monitoring dashboard tables | `resources/dashboard/nhtsa_agent_monitoring_dashboard.lvdash.json` | Find-replace the `catalog.schema` prefix to match yours (the dashboard JSON bakes table names into its queries and does not support bundle-variable substitution). |
 
 ---
 
