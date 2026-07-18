@@ -7,7 +7,7 @@
 [![Databricks](https://img.shields.io/badge/Databricks-Apps%20%2B%20Mosaic%20AI-FF3621?logo=databricks&logoColor=white)](https://www.databricks.com/product/databricks-apps)
 [![MLflow](https://img.shields.io/badge/MLflow-3.8-0194E2?logo=mlflow&logoColor=white)](https://mlflow.org/)
 [![uv](https://img.shields.io/badge/built%20with-uv-DE5FE9)](https://github.com/astral-sh/uv)
-[![Tests](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white)](#testing)
+[![CI](https://github.com/ghoshp83/nhtsa_defect_intel/actions/workflows/ci.yml/badge.svg)](https://github.com/ghoshp83/nhtsa_defect_intel/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ![NHTSA Defect Intel — dashboard hero](assets/01_dashboard_hero.png)

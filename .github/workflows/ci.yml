@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package + test deps
+        run: |
+          uv venv --python 3.12
+          uv pip install -e ".[ci]"
+
+      # Same ruff version .pre-commit-config.yaml pins, so local hooks
+      # and CI can never disagree about what "clean" means.
+      - name: Lint
+        run: uvx ruff@0.15.1 check .
+
+      - name: Format check
+        run: uvx ruff@0.15.1 format --check .
+
+      - name: Tests
+        run: .venv/bin/python -m pytest -q
