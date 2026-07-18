@@ -243,6 +243,36 @@ def test_fetch_rejects_overlong_id(cfg: ProjectConfig) -> None:
     assert "too long" in out["message"]
 
 
+def test_latency_stamped_numeric_on_every_path(cfg: ProjectConfig) -> None:
+    """``_latency_ms`` must be a number on success, error, and unknown-tool.
+
+    The App's trace expander renders ``latency_ms`` per step — it can only
+    do that if the dispatcher stamps a numeric value on every result dict,
+    including failures. This pins the contract app/main.py relies on
+    (the stamp is a float; an int-only check there once rendered "—"
+    for every tool call).
+    """
+    success = execute_tool(
+        VECTOR_SEARCH_TOOL_NAME,
+        {"query": "fire"},
+        ToolContext(
+            cfg=cfg,
+            vs_client=_FakeVSClient([["abc", "Tesla", "burned out"]]),
+            vs_cfg=VectorSearchConfig(num_results=1),
+        ),
+    )
+    error = execute_tool(
+        FETCH_TSB_TOOL_NAME,
+        {"nhtsa_item_number": "x" * 65},
+        ToolContext(cfg=cfg, sql_executor=lambda _q: []),
+    )
+    unknown = execute_tool("not_a_tool", {}, ToolContext(cfg=cfg))
+
+    for out in (success, error, unknown):
+        assert isinstance(out["_latency_ms"], float)
+        assert out["_latency_ms"] >= 0
+
+
 # ---------------------------------------------------------------------------
 # Result serialisation + truncation
 # ---------------------------------------------------------------------------

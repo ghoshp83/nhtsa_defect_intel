@@ -173,7 +173,11 @@ def _render_trace(custom_outputs: dict) -> None:
         for step in trace:
             name = step.get("name", "?")
             latency = step.get("latency_ms")
-            latency_str = f"{latency} ms" if isinstance(latency, int) else "—"
+            # _latency_ms is stamped as a float (mcp.execute_tool rounds to
+            # 2 dp) — an int-only check rendered "—" for every tool call.
+            latency_str = (
+                f"{latency:.0f} ms" if isinstance(latency, (int, float)) else "—"
+            )
             err = step.get("error")
             badge = " ⚠️" if err else ""
             st.markdown(
