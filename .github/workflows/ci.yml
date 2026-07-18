@@ -15,10 +15,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      # setup-uv's python-version input already provisions .venv —
+      # an explicit `uv venv` here fails with "already exists".
       - name: Install package + test deps
-        run: |
-          uv venv --python 3.12
-          uv pip install -e ".[ci]"
+        run: uv pip install -e ".[ci]"
 
       # Same ruff version .pre-commit-config.yaml pins, so local hooks
       # and CI can never disagree about what "clean" means.
