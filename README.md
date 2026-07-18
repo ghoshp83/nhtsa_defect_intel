@@ -690,7 +690,10 @@ uv run pytest
 The agent is built with injected collaborators (`LLMClient`,
 `ToolContext`, `SessionStore`) so the suite never imports the
 Databricks SDK at test-collection time — `pytest` runs on any
-developer machine in seconds, no Spark required.
+developer machine in seconds, no Spark required. CI
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same
+gate on every push: ruff lint + format check (pinned to the version in
+`.pre-commit-config.yaml`) and the full 189-test suite.
 
 <details>
 <summary><strong>Test-suite breakdown</strong> — what each file covers (click to expand)</summary>
@@ -779,15 +782,15 @@ Phase 1 (this branch) covers the end-to-end pipeline + agent + App. Known
 trade-offs from Phase 1 — explicitly documented so reviewers know what's a
 shortcut vs. a design choice:
 
-| # | Item | Why deferred |
+| # | Item | Status / why deferred |
 |---|---|---|
 | 1 | **Campaign-grain bridge** for recall facts | Lets us replace the App's `SELECT DISTINCT campaign_number, units_affected` band-aid with direct counts. |
 | 2 | **Action-grain bridge** for investigations | Same pattern as #1 — collapses (investigation × vehicle) fan-out in the Active Investigations table. |
-| 3 | **Tier-2 citation-format alignment** | The grounded-citation eval scored 0% — likely a regex/format mismatch between the agent's "ODI ID 12345" and the checker's expected format, not a fundamental failure. |
+| 3 | **Tier-2 citation-format alignment** | ✅ **Fixed in 0.1.0.** Confirmed as a format mismatch: the checker's alphanumeric squash turned the agent's "ODI ID 11512345" into a string that could never contain the ground-truth id. `_cite_match` now falls back to the id's numeric core (guarded to ≥ 6 digits). Re-scoring against live traces still to run. |
 | 4 | **Complete `silver_investigation_parsed` backfill** | 2,600 / 20,610 PDFs parsed via `ai_parse_document`; the remainder will unlock per-investigation `fetch_investigation` for older actions. |
 | 5 | **TSB + SGO gold rollups** | Surfaced in the App's *"Coming soon"* panel — silver layer is ingested, gold dimensional rollups still to design. |
-| 6 | **Latency stamping on every tool path** | `tool_trace.latency_ms` shows `—` for a few tools because not all entry points in `mcp.py` stamp `_latency_ms` onto the result dict; the App's expander already renders the field. |
-| 7 | **Scorer regex tightening** | `cite_id_present` / `mentions_oem` are reading 0% on real traces despite obvious citations — likely a regex bug in the trace-side scorer, not in the answer. |
+| 6 | **Latency stamping on every tool path** | ✅ **Fixed in 0.1.0** — and the diagnosis was wrong: `mcp.execute_tool` stamps `_latency_ms` on every path (as a float); the App's `isinstance(latency, int)` check rendered "—" for *every* call. The renderer now accepts any numeric, and a dispatcher test pins the contract. |
+| 7 | **Scorer regex tightening** | ⚠️ **Half fixed in 0.1.0.** `_CITE_ID_RE` now matches the agent's real citation shapes ("ODI ID …", bare 8-digit ids) with regression tests. `mentions_oem` proves correct on plain text, so its 0% likely sits in trace-side response extraction — diagnosing that needs a live workspace. |
 
 ---
 
