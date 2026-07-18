@@ -233,9 +233,7 @@ def read_zip_file(path: str | Path, member_pattern: str) -> str:
 
 
 @contextlib.contextmanager
-def stream_zip_member(
-    zip_bytes: bytes, member_pattern: str
-) -> Iterator[io.TextIOBase]:
+def stream_zip_member(zip_bytes: bytes, member_pattern: str) -> Iterator[io.TextIOBase]:
     """Yield a text-mode stream for the first matching zip member.
 
     Unlike :func:`read_zip_member`, this never materialises the full
@@ -253,6 +251,4 @@ def stream_zip_member(
                 f"No member matching '{member_pattern}' in zip (members: {zf.namelist()})"
             )
         with zf.open(target) as raw:
-            yield io.TextIOWrapper(
-                raw, encoding="latin-1", errors="replace", newline=""
-            )
+            yield io.TextIOWrapper(raw, encoding="latin-1", errors="replace", newline="")

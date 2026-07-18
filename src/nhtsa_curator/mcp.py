@@ -325,9 +325,8 @@ def _run_genie(ctx: ToolContext, question: str) -> dict:
                 q = att.get("query")
             if q is None:
                 continue
-            query_attachment_id = (
-                getattr(att, "attachment_id", None)
-                or (att.get("attachment_id") if isinstance(att, dict) else None)
+            query_attachment_id = getattr(att, "attachment_id", None) or (
+                att.get("attachment_id") if isinstance(att, dict) else None
             )
             inner = getattr(q, "query", None)
             if inner is None and isinstance(q, dict):
@@ -340,9 +339,7 @@ def _run_genie(ctx: ToolContext, question: str) -> dict:
     # when the message has multiple attachments. Fall back to the legacy
     # method only if no attachment_id was found or the SDK doesn't expose
     # the newer method.
-    if query_attachment_id and hasattr(
-        client, "get_message_attachment_query_result"
-    ):
+    if query_attachment_id and hasattr(client, "get_message_attachment_query_result"):
         res = client.get_message_attachment_query_result(
             space_id=ctx.cfg.genie_space_id,
             conversation_id=conv_id,
@@ -409,9 +406,7 @@ def _run_vector_search(
     if filters:
         unknown = set(filters) - _VS_FILTER_KEYS
         if unknown:
-            logger.warning(
-                "Dropping unsupported VS filter keys: {}", sorted(unknown)
-            )
+            logger.warning("Dropping unsupported VS filter keys: {}", sorted(unknown))
             filters = {k: v for k, v in filters.items() if k in _VS_FILTER_KEYS}
 
     hits = similarity_search(

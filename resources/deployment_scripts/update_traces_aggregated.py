@@ -56,9 +56,7 @@ schema = cfg.db_schema
 # the MLflow Experiment → Traces UI ("Sync traces to Unity Catalog") and
 # the table here must match the name chosen there. Pass via widget so
 # the same notebook can serve a renamed table in acc/prd without code.
-traces_table = get_widget(
-    "traces_table", f"{catalog}.{schema}.nhtsa_traces_raw"
-)
+traces_table = get_widget("traces_table", f"{catalog}.{schema}.nhtsa_traces_raw")
 aggregated_view = f"{catalog}.{schema}.nhtsa_traces_aggregated_pg"
 endpoint_name = f"nhtsa-agent-endpoint-{env}-pg"
 

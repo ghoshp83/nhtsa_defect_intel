@@ -169,10 +169,12 @@ def parse_documents(
                                 filter(
                                     try_cast(
                                         parsed:document:elements
-                                        AS array<struct<content: string, description: string, type: string>>
+                                        AS array<struct<content: string,
+                                            description: string, type: string>>
                                     ),
                                     x -> x.type NOT IN ('page_footer', 'page_number')
-                                      AND coalesce(nullif(x.content, ''), x.description) IS NOT NULL
+                                      AND coalesce(nullif(x.content, ''), x.description)
+                                          IS NOT NULL
                                 ),
                                 x -> coalesce(nullif(x.content, ''), x.description)
                             ),
@@ -241,9 +243,7 @@ def parse_documents(
                 f"[{dataset}] marked {len(pdf_rows)} docs as parse_status=error"
             )
 
-    logger.info(
-        f"[{dataset}] parsed_ok={n_ok}, parsed_err={n_err}, queued={n_todo}"
-    )
+    logger.info(f"[{dataset}] parsed_ok={n_ok}, parsed_err={n_err}, queued={n_todo}")
     return {"queued": n_todo, "parsed_ok": n_ok, "parsed_err": n_err}
 
 

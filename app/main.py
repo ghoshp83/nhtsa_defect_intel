@@ -176,7 +176,9 @@ def _render_trace(custom_outputs: dict) -> None:
             latency_str = f"{latency} ms" if isinstance(latency, int) else "—"
             err = step.get("error")
             badge = " ⚠️" if err else ""
-            st.markdown(f"**Step {step.get('step', '?')} · `{name}` · {latency_str}{badge}**")
+            st.markdown(
+                f"**Step {step.get('step', '?')} · `{name}` · {latency_str}{badge}**"
+            )
             args = step.get("args") or {}
             if args:
                 st.json(args, expanded=False)
@@ -350,9 +352,7 @@ try:
     )
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Recall campaigns", f"{recalls:,}")
-    units_label = (
-        f"{units / 1_000_000:.1f}M" if units >= 1_000_000 else f"{int(units):,}"
-    )
+    units_label = f"{units / 1_000_000:.1f}M" if units >= 1_000_000 else f"{int(units):,}"
     c2.metric("Vehicles affected", units_label)
     c3.metric("Complaints (90d)", f"{complaints:,}")
     c4.metric("Open investigations", f"{investigations:,}")

@@ -405,8 +405,7 @@ def write_gold_sgo_av_crashes(spark: SparkSession, cfg: ProjectConfig) -> int:
     ).saveAsTable(table)
     n = spark.table(table).count()
     logger.info(
-        f"gold_sgo_av_crashes: {n:,} rows; "
-        f"included optional cols: {included_optional}"
+        f"gold_sgo_av_crashes: {n:,} rows; included optional cols: {included_optional}"
     )
     return n
 

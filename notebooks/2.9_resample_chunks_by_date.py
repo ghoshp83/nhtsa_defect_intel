@@ -34,7 +34,8 @@
 # MAGIC 4. Sync — should complete in ~8 hours.
 
 # COMMAND ----------
-from pyspark.sql import SparkSession, functions as F
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
 
 from nhtsa_curator.config import get_env, load_config
 
@@ -46,20 +47,22 @@ spark = SparkSession.builder.getOrCreate()
 dbutils.widgets.text("env", "dev")
 dbutils.widgets.text("n_post_2015", "40000")
 dbutils.widgets.text("n_2000_2015", "5000")
-dbutils.widgets.text("n_pre_2000",  "5000")
+dbutils.widgets.text("n_pre_2000", "5000")
 dbutils.widgets.text("seed", "42")
 
 env = get_env(spark)
 cfg = load_config("../project_config.yml", env)
 
 n_post = int(dbutils.widgets.get("n_post_2015"))
-n_mid  = int(dbutils.widgets.get("n_2000_2015"))
-n_pre  = int(dbutils.widgets.get("n_pre_2000"))
-seed   = int(dbutils.widgets.get("seed"))
+n_mid = int(dbutils.widgets.get("n_2000_2015"))
+n_pre = int(dbutils.widgets.get("n_pre_2000"))
+seed = int(dbutils.widgets.get("seed"))
 
 chunks_table = f"{cfg.full_schema_name}.gold_narrative_chunks"
-print(f"Resampling {chunks_table} → {n_post + n_mid + n_pre:,} rows "
-      f"(post_2015={n_post:,}, 2000_2015={n_mid:,}, pre_2000={n_pre:,})")
+print(
+    f"Resampling {chunks_table} → {n_post + n_mid + n_pre:,} rows "
+    f"(post_2015={n_post:,}, 2000_2015={n_mid:,}, pre_2000={n_pre:,})"
+)
 
 # COMMAND ----------
 # Pre-sample diagnostic — confirms bucket population on the existing 435K.
@@ -85,26 +88,25 @@ display(
 src = spark.table(chunks_table).where(F.col("event_date").isNotNull())
 
 post_2015 = src.where(F.col("event_date") >= F.lit("2016-01-01"))
-mid_15    = src.where(
+mid_15 = src.where(
     (F.col("event_date") >= F.lit("2000-01-01"))
-    & (F.col("event_date") <  F.lit("2016-01-01"))
+    & (F.col("event_date") < F.lit("2016-01-01"))
 )
-pre_2000  = src.where(F.col("event_date") < F.lit("2000-01-01"))
+pre_2000 = src.where(F.col("event_date") < F.lit("2000-01-01"))
 
 # orderBy(rand(seed)).limit(N) gives an exact-count random sample per
 # bucket. Triggers a shuffle but 435K rows is comfortable on Free
 # Edition compute.
 sampled = (
-    post_2015.orderBy(F.rand(seed=seed)).limit(n_post)
+    post_2015.orderBy(F.rand(seed=seed))
+    .limit(n_post)
     .unionByName(mid_15.orderBy(F.rand(seed=seed)).limit(n_mid))
     .unionByName(pre_2000.orderBy(F.rand(seed=seed)).limit(n_pre))
 )
 
 # COMMAND ----------
 (
-    sampled
-    .write
-    .mode("overwrite")
+    sampled.write.mode("overwrite")
     .option("overwriteSchema", "true")
     .saveAsTable(chunks_table)
 )
