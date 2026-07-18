@@ -418,12 +418,24 @@ def score_tier3(
 
 
 def _cite_match(source_id: str, actual_answer: str) -> bool:
-    """Return True iff the normalised source_id appears in the answer."""
+    """Return True iff the normalised source_id appears in the answer.
+
+    Primary check: alphanumeric-squashed substring, so "TSB 10160095"
+    matches ground truth "TSB-10160095". That squash is also why the
+    tier-2 eval read 0% for complaints (roadmap #3): the agent writes
+    "ODI ID 11512345", which squashes to "odiid11512345" and can never
+    contain ground truth "odi11512345". Fallback: match on the id's
+    numeric core when it is long enough (>= 6 digits) to be unambiguous
+    — short cores like "23085" from "23V-085" stay prefix-anchored.
+    """
     if not source_id:
         return False
     norm_id = _ID_NORMALISE_RE.sub("", source_id.lower())
     norm_answer = _ID_NORMALISE_RE.sub("", actual_answer.lower())
-    return norm_id in norm_answer
+    if norm_id in norm_answer:
+        return True
+    digits = re.sub(r"\D", "", source_id)
+    return len(digits) >= 6 and digits in norm_answer
 
 
 def _extract_score(judge_out: dict) -> float:
@@ -888,15 +900,22 @@ class OpenAICompatJudge:
 # Matches NHTSA-style source ids emitted by the agent. Kept as a union
 # so a single regex can detect any citation shape without per-type code.
 #   - Recall campaign numbers: 23V123456 / 22V-123-456 / RECALL 23V123456
-#   - Complaint ODI ids: 11512345 (8-digit)
+#   - Complaint ODI ids: ODI 11512345 / ODI ID 11512345 / 11512345 (8-digit)
 #   - Investigation numbers: PE22-001 / EA23-002 / DP22-003 / RQ20-004
-#   - TSB numbers: TSB 10160095 / TSB-10160095 / 10160095 (8+ digit)
+#   - TSB numbers: TSB 10160095 / TSB-10160095 / 10160095 (8-digit)
+# The agent's own instructions (and the README) phrase complaint ids as
+# "ODI ID 11512345", and both ODI + TSB ids are cited bare as 8-digit
+# numbers — the previous pattern required a tight "ODI 11512345" shape
+# and had no bare-number branch, which is why cite_id_present read 0%
+# on real traces (roadmap #7). The bare branch is exactly 8 digits so
+# years / row counts don't false-positive.
 _CITE_ID_RE = re.compile(
     r"(?:"
     r"\b\d{2}[VEIT]-?\d{3,}-?\d*\b"  # recall campaign #
     r"|\b(?:PE|EA|DP|RQ|AQ)\d{2}-\d{3}\b"  # investigation #
-    r"|\bTSB[- ]?\d{6,}\b"  # TSB #
-    r"|\bODI[- ]?\d{6,}\b"  # ODI complaint #
+    r"|\bTSB[- #]*\d{6,}\b"  # TSB #
+    r"|\bODI(?:[- ]?ID)?[- #]*\d{6,}\b"  # ODI #, incl. "ODI ID 11512345"
+    r"|\b\d{8}\b"  # bare 8-digit ODI / TSB id
     r")",
     re.IGNORECASE,
 )

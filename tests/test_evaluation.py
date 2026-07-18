@@ -35,12 +35,15 @@ from nhtsa_curator.evaluation import (
     VALID_TIERS,
     EvalQuestion,
     aggregate_metrics,
+    cite_id_present,
     load_all,
     load_eval_set,
+    mentions_oem,
     run_question,
     score_tier1,
     score_tier2,
     score_tier3,
+    word_count_under,
 )
 from nhtsa_curator.mcp import ToolContext
 from nhtsa_curator.memory import InMemorySessionStore
@@ -234,6 +237,35 @@ def test_tier2_normalises_hyphen_in_citation() -> None:
     )
     assert score == 1.0
     assert breakdown["cite_ok"] is True
+
+
+def test_tier2_matches_odi_id_phrasing() -> None:
+    """Agent says 'ODI ID 11512345', ground truth says 'ODI 11512345'.
+
+    This is the roadmap-#3 0% case: the squashed answer "odiid11512345"
+    can never contain the squashed id "odi11512345", so every complaint
+    row failed on citation. The numeric-core fallback closes it.
+    """
+    score, breakdown = score_tier2(
+        source_id="ODI 11512345",
+        expected_claim="Reports of stalling.",
+        actual_answer="Complaint ODI ID 11512345 reports stalling.",
+        judge=None,
+    )
+    assert score == 1.0
+    assert breakdown["cite_ok"] is True
+
+
+def test_tier2_short_numeric_core_stays_strict() -> None:
+    """Digit fallback needs >= 6 digits — '23085' alone must not match."""
+    score, breakdown = score_tier2(
+        source_id="23V-085",
+        expected_claim="claim",
+        actual_answer="Reference 23085 covers a different campaign format.",
+        judge=None,
+    )
+    assert score == 0.0
+    assert breakdown["cite_ok"] is False
 
 
 def test_tier2_fails_without_citation() -> None:
@@ -532,3 +564,54 @@ def test_aggregate_metrics_empty_returns_zero() -> None:
 
 def test_default_eval_files_cover_all_tiers() -> None:
     assert set(DEFAULT_EVAL_FILES.keys()) == set(VALID_TIERS)
+
+
+# ---------------------------------------------------------------------------
+# Trace-side cheap scorers (cite_id_present / word_count_under /
+# mentions_oem) — first coverage; roadmap #7 flagged cite_id_present
+# reading 0% on real traces.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Recall 23V123456 covers the brake line.",
+        "See campaign 22V-123-456 for the remedy.",
+        "Investigation PE22-001 remains open.",
+        "TSB 10160095 applies to the F-150.",
+        "TSB-10160095 applies to the F-150.",
+        # The two shapes the old regex missed — the agent's documented
+        # citation vocabulary (README: "campaign number, ODI ID, or TSB"):
+        "Complaint ODI ID 11512345 reports stalling.",
+        "Complaint 11512345 reports stalling.",
+    ],
+)
+def test_cite_id_present_matches_agent_citation_shapes(answer: str) -> None:
+    assert cite_id_present(answer) is True
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "The vehicle stalled at highway speed.",
+        "There were 42 complaints in 2023.",  # years / small counts don't count
+        "",
+    ],
+)
+def test_cite_id_present_rejects_uncited_text(answer: str) -> None:
+    assert cite_id_present(answer) is False
+
+
+def test_cite_id_present_unwraps_dict_outputs() -> None:
+    assert cite_id_present({"text": "Recall 23V123456 covers it."}) is True
+
+
+def test_mentions_oem_detects_known_oem() -> None:
+    assert mentions_oem("Ford issued the recall.") is True
+    assert mentions_oem("No manufacturer is named here.") is False
+
+
+def test_word_count_under_cap() -> None:
+    assert word_count_under("short answer") is True
+    assert word_count_under("word " * 401) is False
